@@ -1,12 +1,12 @@
 import { AddressState } from './state.js';
-import { ApiClient } from './api-client.js?v=59';
+import { ApiClient } from './api-client.js?v=60';
 
 /**
  * "Notify me when it confirms" for the address page's pending txs.
  *
  * Watched txs live in AddressState.trackedTxs (tx id -> { missing, missingSince }) so the tx
  * table can mark their rows. While anything is watched the mempool is re-read every
- * POLL_INTERVAL_MS; a watched tx that has left it is looked up by id in the indexers, which
+ * POLL_INTERVAL_MS; a watched tx that has left it is looked up by id in the node's index, which
  * tells "confirmed" (it is in a block) apart from "dropped" (it never got into one).
  * Everything is shown in the page (toast, tab title, table refresh); a browser notification
  * is added where the browser allows one.
@@ -15,10 +15,10 @@ import { ApiClient } from './api-client.js?v=59';
 // While watching, the mempool is re-read this often (the whole page refreshes every 60s).
 const POLL_INTERVAL_MS = 20000;
 // Every this many polls, watched txs a mempool still lists are looked up by id anyway,
-// in case that mempool is stale or our node is behind.
+// in case the node's index is behind its mempool.
 const FULL_CHECK_EVERY = 3;
-// A watched tx that has left every mempool but is in no indexed block is only called dropped
-// (replaced, double-spent or evicted) after this long: the indexers can trail the node.
+// A watched tx that has left the mempool but is in no indexed block is only called dropped
+// (replaced, double-spent or evicted) after this long: the node's index can trail its chain.
 const DROP_GRACE_MS = 10 * 60 * 1000;
 // The final "confirmed" toast closes itself after this.
 const DONE_TOAST_MS = 10000;
@@ -205,7 +205,7 @@ async function checkTrackedTxs() {
 	try {
 		pool = await ApiClient.fetchMempool();
 	} catch (error) {
-		// Every mempool source is down; the indexers can still tell whether a tx confirmed.
+		// The mempool read failed; the index can still tell whether a tx confirmed.
 		console.warn('Mempool check failed:', error);
 	}
 
@@ -225,8 +225,8 @@ async function checkTrackedTxs() {
 			}
 		}
 
-		// Our node drops a tx from its pool as soon as the tx is in a block, while the explorer's
-		// pool can keep listing it for minutes; so ours decides when a lookup is worth it.
+		// The node drops a tx from its pool as soon as the tx is in a block, so a tx gone from
+		// the pool is worth a lookup.
 		const inNodePool = pool !== null && (pool.ownIds ? pool.ownIds.has(txId) : !entry.missing);
 
 		if (!inNodePool || fullCheck) {

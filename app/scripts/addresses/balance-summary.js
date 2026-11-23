@@ -1,4 +1,4 @@
-import { ApiClient } from './api-client.js?v=59';
+import { ApiClient } from './api-client.js?v=60';
 import { AddressState } from './state.js';
 import { isLpTokenData } from '../common/lp-tokens.js?v=4';
 
@@ -6,6 +6,8 @@ import { isLpTokenData } from '../common/lp-tokens.js?v=4';
 // by a block or more: the balance is re-read this often, this many times, until it changes.
 const BALANCE_RECHECK_MS = 10000;
 const BALANCE_RECHECKS = 12;
+// Tokens looked up as NFTs per load, two node requests each
+const NFT_LOOKUP_MAX = 200;
 
 /**
  * Balance summary display and token formatting
@@ -266,21 +268,25 @@ export const BalanceSummary = {
 		return this._formatBalanceRow(labelHtml, formatErgValueString(ergValue, 4, true, true), formatDollarPriceString(usdValue, 2));
 	},
 
+	// LP tokens of Spectrum pools, valued from the pool box on the node. Others stay unpriced.
 	async _loadLpTokenValues(lpTokens) {
 		const values = {};
 		if (!lpTokens || lpTokens.length === 0) return values;
 
-		let lpPoolData = null;
+		let pools;
 		try {
-			lpPoolData = await ApiClient.getLpPools(lpTokens.map(token => token.tokenId));
+			pools = await ApiClient.getSpectrumPools();
 		} catch (error) {
-			console.warn('Failed to fetch cached LP values:', error);
+			console.warn('Failed to read LP pools:', error);
 			return values;
 		}
 
-		const lpPools = lpPoolData && lpPoolData.items ? lpPoolData.items : {};
 		lpTokens.forEach(token => {
-			const value = this._getCachedLpTokenValue(token, lpPools[token.tokenId]);
+			const pool = pools.get(token.tokenId);
+			// The pool's own reserve isn't a holding
+			if (!pool || pool.box.address === AddressState.walletAddress) return;
+
+			const value = ApiClient.spectrumLpValue(pool, token.amount);
 			if (value && value.usdValue > 0) {
 				values[token.tokenId] = value;
 				AddressState.lpTokenValues[token.tokenId] = value;
@@ -288,55 +294,6 @@ export const BalanceSummary = {
 		});
 
 		return values;
-	},
-
-	_getCachedLpTokenValue(token, lpPool) {
-		if (!token || !lpPool || !lpPool.usdPerLpToken) return null;
-		if (lpPool.poolAddress === AddressState.walletAddress) return null;
-
-		this._hydrateTokenMetadata(token, lpPool);
-
-		const walletLpAmountBigInt = this._safeBigInt(token.amount);
-		const emission = this._safeBigInt(lpPool.emissionAmount);
-		// A position NFT's whole supply is 1, so holding all of it is the normal case.
-		if (!lpPool.position && emission > 0n && walletLpAmountBigInt > emission / 2n) return null;
-
-		const lpReserveBigInt = this._safeBigInt(lpPool.lpReserveAmount);
-		const circulatingSupplyBigInt = this._safeBigInt(lpPool.circulatingSupply);
-		if (walletLpAmountBigInt === lpReserveBigInt) return null;
-		if (circulatingSupplyBigInt > 0n && walletLpAmountBigInt > circulatingSupplyBigInt) return null;
-
-		const usdPerLpToken = Number(lpPool.usdPerLpToken);
-		const poolUsdValue = Number(lpPool.poolUsdValue);
-		if (!Number.isFinite(usdPerLpToken) || usdPerLpToken <= 0) return null;
-
-		const usdValue = typeof BigNumber !== 'undefined'
-			? new BigNumber(token.amount).times(usdPerLpToken).toNumber()
-			: Number(token.amount) * usdPerLpToken;
-		if (!Number.isFinite(usdValue) || usdValue <= 0) return null;
-
-		return {
-			usdValue,
-			poolUsdValue
-		};
-	},
-
-	_hydrateTokenMetadata(token, tokenInfo) {
-		if (!token || !tokenInfo) return;
-
-		if (!token.name && tokenInfo.name) token.name = tokenInfo.name;
-		if ((token.decimals === undefined || token.decimals === null) && tokenInfo.decimals !== undefined && tokenInfo.decimals !== null) {
-			token.decimals = tokenInfo.decimals;
-		}
-	},
-
-	_safeBigInt(value) {
-		try {
-			if (value === undefined || value === null) return 0n;
-			return BigInt(value);
-		} catch (error) {
-			return 0n;
-		}
 	},
 
 	_formatBalanceRow(labelHtml, valueHtml, fiatHtml = '') {
@@ -365,20 +322,39 @@ export const BalanceSummary = {
 		return html;
 	},
 
+	// NFT lookups done so far, by token id (null: not an NFT). Two requests each, so the 60 s
+	// refresh only asks about tokens it hasn't seen.
+	_nftInfos: new Map(),
+
 	_loadOtherTokensNftInfo(tokensArray) {
-		const nftSearchTokens = tokensArray.map(token => token.tokenId);
+		// An NFT is a single token with no decimals
+		const candidates = tokensArray
+			.filter(token => String(token.amount) === '1' && Number(token.decimals || 0) === 0)
+			.map(token => token.tokenId);
+		const unknown = candidates.filter(id => !this._nftInfos.has(id)).slice(0, NFT_LOOKUP_MAX);
 
-		if (nftSearchTokens.length > 0) {
-			getNftsInfo(nftSearchTokens, (nftInfos, message) => {
-				if (nftInfos && nftInfos.length > 0) {
-					$('#otherTokens').html(this._formatOtherTokensHtmlString(tokensArray, nftInfos));
-				}
+		const show = () => {
+			const nftInfos = candidates.map(id => this._nftInfos.get(id)).filter(Boolean);
+			if (nftInfos.length === 0) return;
 
-				if (typeof window.onGotOwnedNftInfo === 'function') {
-					window.onGotOwnedNftInfo(nftInfos, message);
-				}
-			});
+			$('#otherTokens').html(this._formatOtherTokensHtmlString(tokensArray, nftInfos));
+			if (typeof window.onGotOwnedNftInfo === 'function') {
+				window.onGotOwnedNftInfo(nftInfos.slice(), null);
+			}
+		};
+
+		if (unknown.length === 0) {
+			show();
+			return;
 		}
+
+		unknown.forEach(id => this._nftInfos.set(id, null));
+		getNftsInfo(unknown, (nftInfos) => {
+			(nftInfos || []).forEach(nftInfo => {
+				if (nftInfo && nftInfo.data && nftInfo.data.id) this._nftInfos.set(nftInfo.data.id, nftInfo);
+			});
+			show();
+		});
 	},
 
 	_getNftInfoByTokenId(nftInfos) {
