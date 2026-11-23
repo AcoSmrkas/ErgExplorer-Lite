@@ -59,7 +59,7 @@ async function getNetworkInfo() {
 		const height = Number(info.fullHeight);
 
 		setCountUpHtml('#blockHeight', height.toLocaleString('en-US'));
-		$('#ergVersion').removeClass('skeleton').text(String(info.appVersion || '').split('-')[0]).addClass('count-up-in');
+		$('#ergVersion').removeClass('skeleton').text(info.parameters && info.parameters.blockVersion != null ? String(info.parameters.blockVersion) : '-').addClass('count-up-in');
 
 		const emission = await LiteNode.emissionAt(height);
 		circulatingNanoErg = decimalString(emission.totalCoinsIssued);

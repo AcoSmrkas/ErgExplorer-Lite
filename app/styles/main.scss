@@ -694,6 +694,14 @@ html[data-theme="mew"] .btn-primary {
 	box-shadow: none;
 }
 
+/* Bootstrap paints disabled .btn-info cyan; keep the theme colour, just dimmed */
+.btn-info:disabled,
+.btn-info.disabled {
+	background-color: var(--main-color) !important;
+	border: none;
+	opacity: 0.65;
+}
+
 .footer {
 	background-color: var(--footer) !important;
 	color: var(--text-light);
