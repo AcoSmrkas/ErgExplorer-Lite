@@ -31,7 +31,7 @@ function getReturnPath() {
 const CONNECT_ERRORS = {
 	none: 'Enter a node address.',
 	bad: null,
-	mixed: 'This page is on https, so your browser blocks a plain-http node. Use https, a node on this computer, or the release zip.',
+	mixed: 'This page is on https, so your browser blocks a plain-http node. Use https, or a node on this computer.',
 	unreachable: 'Could not reach the node. Check the address, and that it allows requests from other sites (CORS).',
 	timeout: 'The node did not answer in time.',
 	noindex: 'This node has no index. Set ergo.node.extraIndex = true and let it sync.',
