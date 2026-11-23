@@ -53,14 +53,22 @@
 }
 
 .connect-card {
-	padding: 24px 20px;
+	padding: 28px 24px;
+}
+
+.connect-card h2 {
+	margin-bottom: 6px;
+}
+
+.connect-card h2 + p {
+	margin-bottom: 0;
 }
 
 /* URL field joined to its button like the search bar. The card has the same fill as form
    fields, so the field gets a darker fill and an edge to read as an input */
 .connect-form {
 	display: flex;
-	margin: 16px 0 12px;
+	margin: 20px 0 10px;
 }
 
 .connect-form .form-control {
@@ -82,15 +90,21 @@
 	border-radius: 0 8px 8px 0;
 }
 
-[data-theme="light"] .connect-form .form-control {
+[data-bs-theme="light"] .connect-form .form-control {
 	background-color: #fff;
 	border-color: rgba(0, 0, 0, 0.2);
 }
 
 .suggested-nodes {
-	margin: -4px 0 12px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 8px;
+	margin-bottom: 28px;
 	font-size: 0.9rem;
-	opacity: 0.8;
+}
+
+.suggested-nodes-label {
+	opacity: 0.6;
 }
 
 .suggested-nodes a {
@@ -98,7 +112,7 @@
 }
 
 .connect-status {
-	margin-bottom: 16px;
+	margin: -12px 0 28px;
 	padding: 10px 12px;
 	border-radius: 6px;
 	border: 1px solid rgba(255, 255, 255, 0.12);
@@ -109,7 +123,12 @@
 .connect-error { border-color: #f85149; }
 
 .saved-nodes {
-	margin: 8px 0 16px;
+	margin-bottom: 28px;
+}
+
+/* The list sits between two rules, one row per node; the node in use has the status dot */
+#savedNodesList {
+	border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .saved-node {
@@ -117,13 +136,41 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
-	padding: 6px 0;
+	padding: 8px 0;
 	border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 	overflow-wrap: anywhere;
 }
 
-.saved-node-current a {
-	font-weight: 600;
+.saved-node a {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	color: inherit;
+}
+
+.saved-node-url {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.saved-node a:hover {
+	color: var(--main-color);
+}
+
+/* Every row keeps the dot's space so the addresses line up */
+.saved-node .node-dot {
+	background: transparent;
+}
+
+.saved-node-current .node-dot {
+	background: #3fb950;
+}
+
+[data-bs-theme="light"] #savedNodesList,
+[data-bs-theme="light"] .saved-node {
+	border-color: rgba(0, 0, 0, 0.12);
 }
 
 .saved-node-remove {
@@ -162,9 +209,18 @@
 }
 
 .saved-nodes-label {
-	margin-bottom: 4px;
+	margin-bottom: 8px;
 	font-size: 0.8rem;
 	opacity: 0.6;
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
+}
+
+/* The light theme forces link and button colours with !important */
+[data-bs-theme="light"] .suggested-nodes a {
+	color: var(--main-color) !important;
+}
+
+[data-bs-theme="light"] .saved-node-remove {
+	color: #444 !important;
 }

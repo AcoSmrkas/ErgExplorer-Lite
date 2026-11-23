@@ -81,7 +81,8 @@ function renderSavedNodes() {
 
 	for (const url of saved) {
 		const row = $('<div class="saved-node"></div>');
-		const use = $('<a href="#"></a>').text(url);
+		const use = $('<a href="#"></a>').attr('title', url)
+			.append('<span class="node-dot"></span>', $('<span class="saved-node-url"></span>').text(url));
 		const remove = $('<button type="button" class="btn btn-sm saved-node-remove" title="Remove"><i class="fas fa-xmark"></i></button>');
 
 		if (url == current) {
@@ -108,7 +109,7 @@ function renderSavedNodes() {
 function renderSuggestedNodes() {
 	const box = $('#suggestedNodes');
 
-	SUGGESTED_NODES.forEach(function(url, i) {
+	SUGGESTED_NODES.forEach(function(url) {
 		const link = $('<a href="#"></a>').text(new URL(url).host);
 
 		link.on('click', function(e) {
@@ -117,6 +118,6 @@ function renderSuggestedNodes() {
 			connect(url);
 		});
 
-		box.append(i > 0 ? ', ' : '', link);
+		box.append(link);
 	});
 }
