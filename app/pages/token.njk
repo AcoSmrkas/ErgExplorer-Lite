@@ -18,14 +18,6 @@
 		</div>
 	</div>
 
-	<div id="tokenScamHolder" style="display: none;" class="col-md-12">
-		<div id="tokenScam" class="border-danger row w-100 div-cell-dark p-3">
-			<div class="col-12"><h5>⚠️ Possible <b>SCAM</b> ⚠️</h5></div>
-			<div class="col-12"><b>Warning:</b> This token has been flagged by the community as a potential scam. Proceed with caution.</div>
-		</div>
-		<br>
-	</div>
-
 	<div id="tokenDataHolder" style="display: none;" class="col-md-12">
 		<div class="row w-100 div-cell-dark token-header-row border-bottom-flat align-items-center">
 			<div id="tokenHeader" class="col pe-2 ps-0 ps-md-0"></div>
@@ -101,10 +93,6 @@
 				</div>
 				<div id="nftPreviewImgHolder" class="col-lg-3 p-0" style="border-radius: 5px 0 0 5px;">
 					<img id="nftPreviewImg" onclick="showFullImgPreview()" style="display: none;" onload="onNftImageLoad()" src="">					
-					<div id="nftPreviewImgNsfw" onclick="showImage()" style="display: none;">
-						<p><b>NSFW content</b></p>
-						<p>Click to show</p>
-					</div>
 					<video style="display: none;" id="nftPreviewVideo" controls crossorigin allowfullscreen name="media"><source id="nftPreviewVideoSource" src="" type="video/mp4"></video>
 				</div>
 				<div id="nftInfoHolder" class="col-lg-9 p-0">
@@ -120,12 +108,6 @@
 						<div class="col-md-3"><strong><p class="text-white">Mint address</p></strong></div>
 						<div id="nftMintedAddress" class="col"></div>
 					</div>
-					<!--
-					<div id="nftMintedWalletHolder" style="display: none;" class="row w-100 p-2">
-						<div class="col-md-3"><strong><p class="text-white">Mint wallet</p></strong></div>
-						<div id="nftMintedWallet" class="col"></div>
-					</div>
-					-->	
 					<div class="row w-100 p-2">
 						<div class="col-md-3"><strong><p class="text-white">Mint transaction</p></strong></div>
 						<div id="nftMintedTransaction" class="col"></div>
@@ -149,14 +131,6 @@
 					<div id="nftHashHolder" class="row w-100 p-2">
 						<div class="col-md-3"><strong><p class="text-white">SHA-256 hash</p></strong></div>
 						<div id="nftHash" class="col"></div>
-					</div>
-					{# <div id="marketplaceHolder" class="row w-100 p-2 border-top-flat">
-						<div class="col-md-3"><strong><p class="text-white">Marketplace</p></strong></div>
-						<div id="nftAuction" class="col"></div>
-					</div> #}
-					<div id="royaltyHolder" style="display: none;" class="row w-100 p-2 border-top-flat">
-						<div class="col-md-3"><strong><p class="text-white">Royalty</p></strong></div>
-						<div id="nftRoyalty" class="col"></div>
 					</div>
 					<div id="twitterHolder" style="display: none;" class="row w-100 p-2 border-top-flat">
 						<div class="col-md-3"><strong><p class="text-white">Twitter</p></strong></div>
@@ -184,19 +158,6 @@
 					<div id="nftLevels" style="display: grid;
 	grid-template-columns:  repeat(auto-fill, minmax(150px, 1fr)); /* Creates 3 equal-width columns */
 	gap: 10px; /* Space between grid items */"></div>
-				</div>
-				<div id="nftCollectionHolder" style="display: none; padding-bottom: 15px;">
-					<h3 style="margin-top:10px;margin-bottom: 10px;">Collection Data</h3>
-					<div id="nftCollectionDataHolder" class="col-12 p-0 stripedHolder">
-						<div class="row w-100 p-2 border-bottom-flat">
-							<div class="col-md-3"><strong><p class="text-white">ID</p></strong></div>
-							<div id="nftCollectionId" class="col"></div>
-						</div>
-						<div class="row w-100 p-2 border-bottom-flat">
-							<div class="col-md-3"><strong><p class="text-white">Name</p></strong></div>
-							<div id="nftCollectionName" class="col"></div>
-						</div>
-					</div>
 				</div>
 			</div>
 		</div>
@@ -235,158 +196,93 @@
 			<h3 class="p-2">Supply</h3>
 			<div class="div-cell-dark row w-100 p-0">
 				<div id="supplyInfoHolder" class="col-lg-12 p-0 stripedHolder text-white">
-					<div id="tokenMarketCapRow" style="display: none;" class="row w-100 p-2">
-						<div class="col-md-3"><strong><p class="text-white">Market Cap</p></strong></div>
-						<div id="tokenMarketCap" class="col"></div>
-					</div>
 					<div id="tokenLiquidSupplyRow" style="display: none;" class="row w-100 p-2">
-						<div class="col-md-3"><strong><p class="text-white">Liquid Supply</p></strong></div>
+						<div class="col-md-3"><strong><p class="text-white">Circulating</p></strong></div>
 						<div id="tokenLiquidSupply" class="col"></div>
 					</div>
-					<div id="tokenLockedSupplyRow" style="display: none;" class="row w-100 p-2">
-						<div class="col-md-3"><strong><p class="text-white">Locked Supply</p></strong></div>
-						<div id="tokenLockedSupply" class="col"></div>
-					</div>
 					<div id="tokenBurnedSupplyRow" style="display: none;" class="row w-100 p-2">
-						<div class="col-md-3"><strong><p class="text-white">Burned Supply</p></strong></div>
+						<div class="col-md-3"><strong><p class="text-white">Burned</p></strong></div>
 						<div id="tokenBurnedSupply" class="col"></div>
 					</div>
+					<div id="tokenMarketCapRow" style="display: none;" class="row w-100 p-2">
+						<div class="col-md-3"><strong><p class="text-white">Market cap</p></strong></div>
+						<div id="tokenMarketCap" class="col"></div>
+					</div>
 				</div>
 			</div>
+			<br>
 		</div>
 
-		<br>
-
-		<div id="priceLoading" style="margin-top:50px;margin-bottom:50px;"> 
-			<div id="priceLoadingInner">
-				<img id="loadingImgPrice" src="./images/logo-300.png" alt="Loading" class="loadingImg index-card-symbol" style="display: block; margin: 0 auto;">
-			</div>
-		</div>
-
-		<div id="priceInfo" style="display: none;">		
-			<h3 id="financeHeader" class="p-2">Finance</h3>
-			<h3 id="holdersSectionHeader" style="display: none;" class="p-2">Top 10 holders <span id="totalHolderCountStandalone" class="text-light"></span></h3>
+		<div id="priceInfo" style="display: none;">
+			<h3 class="p-2">Market</h3>
 			<div class="div-cell-dark row w-100 p-0">
-				<div id="chartColumn" class="col border-end pt-2 pb-0 pb-md-3">
-					<div style="padding-bottom: 5px !important;" class="row w-100 p-0 p-md-2 div-striped-holder">
-						<div class="text-md-center col-md-3 p-1">
-							<p><strong>Price:</strong> <span class="text-light" id="usdPrice"></span></p>
-						</div>
-						<div class="text-md-center col-md-3 p-1 border-md-start">
-							<p><strong>24h:</strong> <span class="" id="usdChange24h"></span></p>
-						</div>
-						<div class="text-md-center col-md-3 p-1 border-md-start">
-							<p><strong>7d:</strong> <span class="" id="usdChange7d"></span></p>
-						</div>
-						<div class="text-md-center col-md-3 p-1 border-md-start">
-							<p><strong>30d:</strong> <span class="" id="usdChange30d"></span></p>
-						</div>
+				<div id="marketInfoHolder" class="col-lg-12 p-0 stripedHolder text-white">
+					<div class="row w-100 p-2">
+						<div class="col-md-3"><strong><p class="text-white">Price</p></strong></div>
+						<div id="usdPrice" class="col"></div>
 					</div>
-					<hr class="mt-2 mb-2">
-					<div class="row w-100 p-0 p-md-2 ps-md-0 pe-md-0">
-						<div class="col-6 p-0 pb-1">
-							<h4>Price chart <input id="chartToggleBtn" onclick="toggleChart()" type="button" class="btn btn-info ms-1" value="USD" /></h4>
-						</div>
-						<div class="col-6 p-0 token-chart-controls">
-							<input id="showGainersLosers24h" onclick="printGainersLosers24h()" class="btn btn-info token-chart-range-btn" type="button" value="24h">
-							<input id="showGainersLosers7d" onclick="printGainersLosers7d()" class="btn btn-primary token-chart-range-btn" type="button" value="7d">
-							<input id="showGainersLosers30d" onclick="printGainersLosers30d()" class="btn btn-primary token-chart-range-btn" type="button" value="30d">
-						</div>
+					<div class="row w-100 p-2">
+						<div class="col-md-3"><strong><p class="text-white">Liquidity</p></strong></div>
+						<div id="tokenLiquidity" class="col"></div>
 					</div>
-					<div class="token-chart-frame">
-						<canvas id="chart"></canvas>
+					<div class="row w-100 p-2">
+						<div class="col-md-3"><strong><p class="text-white">Pools</p></strong></div>
+						<div id="tokenPools" class="col"></div>
 					</div>
-
-					<hr class="my-3 d-lg-none">
 				</div>
-				<div id="holdersColumn" class="p-0 col-xl-6 col-lg-12 col-md-12 col-sm-12 col-12">
-					<h4 id="holdersInlineHeader" style="display: inline-block;padding-right:10px !important;" class="p-3 pb-2">Top 10 holders</h4><span id="totalHolderCount" class="text-light"></span>
-					<div id="holdersLoading"> 
+			</div>
+			<br>
+		</div>
+
+		<div id="holdersHolder" style="display: none;">
+			<h3 class="p-2"><span id="holdersTitle">Top 10 holders</span> <span id="totalHolderCount" class="text-light"></span></h3>
+			<div class="div-cell-dark row w-100 p-0">
+				<div class="p-0 col-12">
+					<div id="holdersLoading">
 						<div id="holdersLoadingInner">
-							<canvas id="loadingImgHolders" class="loadingImg" width="150" height="150"></canvas>
+							<img src="./images/logo-300.png" alt="Loading" class="loadingImg index-card-symbol" style="display:block;width:60px;height:60px;margin:20px auto;">
 						</div>
 					</div>
-					<table id="holdersTable" style="display:none; border-left: 0 !important;" class="table table-dark table-striped table-mobile m-0">
+					<table id="holdersTable" style="display:none;" class="table table-dark table-striped table-mobile m-0">
 						<thead>
 							<tr>
 								<th scope="col">Address</th>
 								<th style="min-width:200px;" scope="col">Balance</th>
-								<th>Percent</th>
+								<th class="d-none d-lg-table-cell" style="text-align:right;">Share</th>
 							</tr>
 						</thead>
-
-						<tbody id="holdersTableBody">
-
-						</tbody>
+						<tbody id="holdersTableBody"></tbody>
 					</table>
+					<p id="holdersNote" style="display: none;" class="text-light p-2 m-0"></p>
 				</div>
 			</div>
-			<div id="txsHolder" style="display: none; margin-top:20px !important;" class="div-cell-dark row w-100 p-0">
-				<div class="p-0 pe-lg-2 col-xl-12 col-lg-12 col-md-12 col-sm-12 col-12">
-					<h4 style="display: inline-block;padding-right:10px !important;" class="p-3 pb-2">Latest Transactions</h4>
-					<div id="txsLoading"> 
-						<div id="txsLoadingInner">
-							<canvas id="loadingImgTxs" class="loadingImg" width="150" height="150"></canvas>
-						</div>
-					</div>
-					<table id="txsTable" style="display:none; border-left: 0 !important;" class="w-100 w-full table table-dark table-striped table-mobile m-0">
-						<thead>
-							<tr>
-								<th scope="col">Tx</th>
-								<th scope="col" style="min-width: 180px">Time</th>
-								<th scope="col">Block</th>
-								<th style="min-width:200px" scope="col">From</th>
-								<th style="min-width:200px" scope="col">To</th>
-								<th scope="col" >Value</th>
-							</tr>
-						</thead>
-
-						<tbody id="txsTableBody">
-
-						</tbody>
-					</table>
-				</div>
-			</div>
-			<h3 id="swapsHeader" style="display: none; margin-top:20px !important;" class="p-2">Latest DEX Swaps</h3>
-			<div id="swapsHolder" style="display: none;" class="div-cell-dark row w-100 p-0">
-				<div class="p-0 col-xl-12 col-lg-12 col-md-12 col-sm-12 col-12">
-					<div id="swapsLoading"> 
-						<div id="swapsLoadingInner">
-							<canvas id="loadingImgSwaps" class="loadingImg" width="150" height="150"></canvas>
-						</div>
-					</div>
-					<table id="swapsTable" style="display:none;" class="w-100 w-full table table-dark table-striped table-mobile rounded-data-table m-0">
-						<thead>
-							<tr>
-								<th scope="col">Address</th>
-								<th style="min-width:200px;" scope="col">Type</th>
-								<th>Amount</th>
-								<th>Method</th>
-								<th>TX ID</th>
-								<th>Timestamp</th>
-							</tr>
-						</thead>
-
-						<tbody id="swapsTableBody">
-
-						</tbody>
-					</table>
-				</div>
-			</div>
+			<br>
 		</div>
 
-		<div id="addressbookInfo" style="display: none;">
-		<br>
-			<h3 class="p-2">Address book</h3>
+		<div id="boxesHolder" style="display: none;">
+			<h3 class="p-2">Boxes <span id="boxesCount" class="text-light"></span></h3>
 			<div class="div-cell-dark row w-100 p-0">
-				<div id="addressbookUrl" style="display: none;" class="col-12 p-2">
-					
+				<div class="p-0 col-12">
+					<table id="boxesTable" style="display:none;" class="w-100 table table-dark table-striped table-mobile m-0">
+						<thead>
+							<tr>
+								<th scope="col">Box</th>
+								<th class="d-none d-lg-table-cell" scope="col">Block</th>
+								<th scope="col">Address</th>
+								<th style="min-width:180px" scope="col">Amount</th>
+								<th class="d-none d-lg-table-cell" scope="col">Created</th>
+								<th scope="col">Spent</th>
+							</tr>
+						</thead>
+						<tbody id="boxesTableBody"></tbody>
+					</table>
+					<div id="boxesMore" style="display: none;" class="p-2 text-center">
+						<input id="boxesMoreBtn" type="button" class="btn btn-info" value="Load more" onclick="loadMoreTokenBoxes()">
+					</div>
 				</div>
-				<div id="addressbookInfoHolder" class="div-striped-holder col-lg-12 p-0">
-
-				</div>				
 			</div>
 		</div>
+		<div id="boxesLoading"></div>
 	</div>
 
 	{% include "partials/error-message.njk" %}
@@ -403,8 +299,7 @@
 {% endblock %}
 
 {% block scripts %}
-	<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.3.1/chart.umd.min.js" integrity="sha512-UcCmTcAm3IkzrswF+WqvwWSjsnv8nsJpDL09KHCETWS0g0WjoIZDRUYXCeHeow1cEij0kqL9OwRwirv/xCQ6GA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 	<script src="./scripts/common/prices.js?v=44"></script>
 	<script src="./scripts/common/nft.js?v=42"></script>
-	<script type="module" src="./scripts/token/index.js?v=51"></script>
+	<script type="module" src="./scripts/token/index.js?v=58"></script>
 {% endblock %}

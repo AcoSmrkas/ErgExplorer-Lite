@@ -11,7 +11,7 @@ table > tbody > tr > td {
 }
 
 #holdersTable,
-#txsTable,
+#boxesTable,
 #swapsTable {
 	--bs-border-color: var(--borders);
 	--bs-table-border-color: var(--borders);
@@ -19,20 +19,20 @@ table > tbody > tr > td {
 }
 
 #holdersTable > :not(caption) > * > *,
-#txsTable > :not(caption) > * > *,
+#boxesTable > :not(caption) > * > *,
 #swapsTable > :not(caption) > * > * {
 	border-color: var(--borders) !important;
 }
 
 #holdersTable > thead > tr > th,
-#txsTable > thead > tr > th,
+#boxesTable > thead > tr > th,
 #swapsTable > thead > tr > th {
 	border-top: 0 !important;
 	border-bottom: 2px solid var(--main-color) !important;
 }
 
 #holdersTable > tbody > tr:last-child > td,
-#txsTable > tbody > tr:last-child > td,
+#boxesTable > tbody > tr:last-child > td,
 #swapsTable > tbody > tr:last-child > td {
 	border-bottom: 0 !important;
 }
@@ -45,12 +45,21 @@ table > tbody > tr > td {
 	background-color: var(--striped-1);
 }
 
-#supplyInfoHolder > div:nth-child(odd) {
+#supplyInfoHolder > div:nth-child(odd), #marketInfoHolder > div:nth-child(odd) {
 	background-color: var(--striped-1);
 }
 
-#supplyHolder > .div-cell-dark {
+#supplyHolder > .div-cell-dark, #priceInfo > .div-cell-dark, #holdersHolder > .div-cell-dark, #boxesHolder > .div-cell-dark {
 	overflow: hidden;
+}
+
+#totalHolderCount, #boxesCount {
+	font-size: 0.7em;
+	font-weight: 600;
+}
+
+#boxesTable td, #holdersTable td {
+	overflow-wrap: anywhere;
 }
 
 #holdersSectionHeader .text-light {

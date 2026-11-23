@@ -1,575 +1,449 @@
-import { TokenState } from './state.js';
-import { TokenApiClient } from './api-client.js?v=5';
-import { TokenUIDisplay } from './ui-display.js?v=3';
-import { TokenUIControllers } from './ui-controllers.js?v=2';
-import { TokenAnalyzer } from './token-analyzer.js?v=3';
+import { TokenState } from './state.js?v=2';
+import { TokenApiClient } from './api-client.js?v=8';
+import { TokenUIDisplay } from './ui-display.js?v=8';
+import { TokenUIControllers } from './ui-controllers.js?v=3';
+import { TokenAnalyzer } from './token-analyzer.js?v=4';
 import { isLpTokenData } from '../common/lp-tokens.js?v=4';
 
-// Main initialization
 $(function() {
-	TokenState.tokenId = typeof getWalletAddressFromUrl === 'function' ? getWalletAddressFromUrl() : undefined;
-	console.log('[Token Module] Token ID:', TokenState.tokenId);
+	TokenState.tokenId = (getWalletAddressFromUrl() || '').toLowerCase();
 
-	if (!TokenState.tokenId) {
-		if (typeof showLoadError === 'function') {
-			showLoadError('No token ID provided');
-		}
+	if (!/^[0-9a-f]{64}$/.test(TokenState.tokenId)) {
+		$('#txLoading').hide();
+		showLoadError('No results matching your query.');
 		return;
 	}
 
-	// Set page title
-	if (typeof setDocumentTitle === 'function') {
-		setDocumentTitle(TokenState.tokenId);
-	}
+	setDocumentTitle(TokenState.tokenId);
 
-	// Start loading NFT info
-	if (typeof getNftInfo === 'function') {
-		getNftInfo(TokenState.tokenId, window.onGetNftInfoDone);
-	}
+	// Prices load alongside the token: Spectrum pool boxes from the node, cached for a few minutes
+	const pricesLoaded = new Promise(resolve => getPrices(resolve, true));
 
-	// Fetch supply and market data from Crux (will also trigger price loading)
-	TokenApiClient.getCruxData();
-
-	// Check addressbook for token addresses
-	TokenApiClient.checkAddressbook();
+	LiteNode.tokenWithIssuingBox(TokenState.tokenId).then(function(data) {
+		onTokenLoaded(processNftData(data), pricesLoaded);
+	}, function(e) {
+		$('#txLoading').hide();
+		showLoadError(e.kind === 'notfound'
+			? 'No results matching your query.'
+			: 'Couldn\'t load this token. <a href="#" onclick="location.reload(); return false;">Try again</a>');
+	});
 });
 
-// Main NFT info callback - displays token details
-window.onGetNftInfoDone = function(nftInfo, message) {
+function blockLinkHtml(height) {
+	if (height == null) return '';
+
+	return '<p><a href="' + getBlockUrl(height) + '">' + nFormatter(Number(height), 0, true, true) + '</a></p>';
+}
+
+function addressLinkHtml(address) {
+	addAddress(address);
+
+	return '<p><a class="address-string" addr="' + address + '" href="' + getWalletAddressUrl(address) + '">' + formatLongAddressString(address) + '</a></p>';
+}
+
+function onTokenLoaded(nftInfo, pricesLoaded) {
 	$('#txLoading').hide();
 
-	if (nftInfo == null) {
-		if (typeof showLoadError === 'function') {
-			if (message) {
-				showLoadError('Couldn\'t load this token. <a href="#" onclick="location.reload(); return false;">Try again</a>');
-			} else {
-				showLoadError('No results matching your query.');
-			}
-		}
-		return;
+	const data = nftInfo.data;
+	TokenState.tokenData = data;
+	TokenState.decimals = Number(data.decimals) || 0;
+	TokenState.isLpToken = isLpTokenData(data);
+
+	$('#tokenHeader').html('<p><a href="Copy to clipboard!" onclick="copyTokenAddress(event)">' + data.id + ' &#128203;</a></p>');
+	$('#tokenName').html('<p></p>').find('p').text(data.name || '');
+	$('#tokenEmissionAmount').html('<p>' + nFormatter(getAssetValue(String(data.emissionAmount), TokenState.decimals), 0, true, true) + '</p>');
+	$('#tokenDecimals').html('<p>' + TokenState.decimals + '</p>');
+	$('#tokenType').html('<p>' + (nftInfo.isNft ? 'NFT' : 'Token') + '</p>');
+
+	const asciiArt = isAsciiArt(data.description);
+	$('#tokenDescription').html('<pre style="max-height:200px;overflow-y:auto;" class="tokenDescriptionPre' + (asciiArt ? ' pre-ascii' : '') + '">' + (formatNftDescription(escapeMarkup(data.description || '')) || '') + '</pre>');
+
+	// Icons ship with the page; a priced token may also have one in Spectrum's public logo set
+	const icon = getIcon(data.id);
+
+	if (icon != undefined) {
+		setLargeTokenThumb($('#tokenIconImg')[0], data.id, icon);
 	}
 
-	TokenState.tokenData = nftInfo.data;
-	TokenState.isLpToken = isLpTokenData(TokenState.tokenData);
-
-	// Display collection info if exists
-	if (TokenState.tokenData.collectionid && TokenState.tokenData.collectionid != '') {
-		if (typeof getTokenUrl === 'function') {
-			$('#nftCollectionId').html('<p><a href="' + getTokenUrl(TokenState.tokenData.collectionid) + '">' + TokenState.tokenData.collectionid + '</p>');
-			$('#nftCollectionName').html('<p>' + TokenState.tokenData.collectionname + '</p>');
-			$('#nftCollectionHolder').show();
-		}
-	}
-
-	// Show scam warning if applicable
-	if (TokenState.tokenData.scam) {
-		$('#tokenScamHolder').show();
-	}
-
-	// Display royalty
-	if (TokenState.tokenData.royaltypercent && TokenState.tokenData.royaltypercent > 0) {
-		$('#royaltyHolder').show();
-		$('#nftRoyalty').html('<p>' + TokenState.tokenData.royaltypercent + "%</p>");
-	} else {
-		$('#royaltyHolder').remove();
-	}
-
-	// Display token ID header
-	$('#tokenHeader').html('<p><a href="Copy to clipboard!" onclick="copyTokenAddress(event)">' + TokenState.tokenData.id + ' &#128203;</a></p>');
-
-	// Display token name
-	$('#tokenName').html('<p>' + TokenState.tokenData.name + '</p>');
-
-	// Display emission amount
-	TokenState.decimals = TokenState.tokenData.decimals;
-	if (typeof getAssetValue === 'function') {
-		let emissionAmount = getAssetValue(TokenState.tokenData.emissionAmount, TokenState.tokenData.decimals);
-		$('#tokenEmissionAmount').html('<p>' + (typeof nFormatter === 'function' ? nFormatter(emissionAmount, 0, true, true) : emissionAmount) + '</p>');
-	}
-
-	// Check for single NFT (1/1)
-	if (TokenState.tokenData.emissionAmount == 1) {
-		TokenAnalyzer.getCurrentAddress();
-	} else {
-		$('[id="nftCurrentAddressHolder"]').remove();
-	}
-
-	// Display decimals
-	$('#tokenDecimals').html('<p>' + TokenState.tokenData.decimals + '</p>');
-
-	// Display type
-	$('#tokenType').html('<p>' + TokenState.tokenData.type + '</p>');
-
-	// Check if token is burned
-	let isBurned = TokenState.tokenData.isBurned == 't';
-	if (isBurned) {
-		$('#tokenBurned').show();
-		$('[id="nftCurrentAddressHolder"]').remove();
-		TokenAnalyzer.getBurnTx();
-	} else {
-		TokenAnalyzer.checkIfBurned();
-	}
-
-	// Display description
-	if (typeof isAsciiArt === 'function' && typeof formatNftDescription === 'function') {
-		let asciiArt = isAsciiArt(TokenState.tokenData.description);
-		$('#tokenDescription').html('<pre style="max-height:200px;overflow-y:auto;" class="tokenDescriptionPre' + (asciiArt ? ' pre-ascii' : '') + '">' + formatNftDescription(TokenState.tokenData.description) + '</pre>');
-	}
-
-	// Set token icon
-	let tImg = typeof getIcon === 'function' ? getIcon(TokenState.tokenData.id) : undefined;
-	let hasThumb = tImg != undefined;
-	if (tImg == undefined) {
-		tImg = 'https://raw.githubusercontent.com/spectrum-finance/token-logos/master/logos/ergo/' + TokenState.tokenData.id + '.svg';
-	}
-
-	if (TokenState.tokenData.name == 'Crooks Finance Stake Key') {
-		tImg = 'https://crooks-fi.com/images/logo.png';
-		hasThumb = false;
-	}
-
-	if (TokenState.tokenData.iconurl) {
-		tImg = TokenState.tokenData.iconurl;
-		hasThumb = true;
-	}
-
-	if (hasThumb) {
-		setLargeTokenThumb($('#tokenIconImg')[0], TokenState.tokenData.id, tImg);
-	} else {
-		$('#tokenIconImg').attr('src', tImg);
-	}
 	$('#tokenDataHolder').show();
 
-	// Handle NFTs (special tokens with media)
 	if (nftInfo.isNft) {
-		$('#tokenHolder').remove();
-		TokenState.nftType = nftInfo.type;
+		showNftInfo(nftInfo);
+		loadIssuerRegisters();
+	} else {
+		showTokenInfo();
+	}
 
-		$('#nftType').html('<p>' + nftInfo.type + '</p>');
-		$('#nftHash').html('<p>' + nftInfo.hash + '</p>');
-		if (nftInfo.type == (typeof NFT_TYPE !== 'undefined' ? NFT_TYPE.ArtCollection : 'Art collection')) {
-			$('[id="nftHashHolder"]').remove();
+	if (String(data.emissionAmount) !== '1') {
+		$('[id="nftCurrentAddressHolder"]').remove();
+	}
+
+	$('#holdersHolder').show();
+	loadHolders();
+	loadBoxes(0);
+
+	pricesLoaded.then(function() {
+		TokenState.pricesLoaded = true;
+		TokenState.market = (typeof tokenPriceList !== 'undefined' ? tokenPriceList : []).find(item => item.id == TokenState.tokenId) || null;
+
+		if (TokenState.market && getIcon(TokenState.tokenId) == undefined) {
+			$('#tokenIconImg').attr('src', 'https://raw.githubusercontent.com/spectrum-finance/token-logos/master/logos/ergo/' + TokenState.tokenId + '.svg');
 		}
 
-		// Mint address
-		let mintAddress = TokenState.tokenData.address;
-		if (TokenState.tokenData.mintWallet != null) {
-			mintAddress = TokenState.tokenData.mintWallet;
+		TokenUIControllers.setLinks();
+		TokenUIDisplay.printMarketInfo();
+		TokenUIDisplay.printSupplyInfo();
+		TokenUIDisplay.printHolders();
+		TokenUIDisplay.printBoxes();
+	});
+}
+
+function showTokenInfo() {
+	const data = TokenState.tokenData;
+
+	$('#nftHolder').remove();
+	$('#nftType').html('<p>Token</p>');
+	$('#nftMintedAddress').html(addressLinkHtml(data.address));
+	$('#nftMintedTransaction').html('<p><a href="' + getTransactionsUrl(data.transactionId) + '">' + data.transactionId + '</a></p>');
+	$('#nftCreationHeight').html(blockLinkHtml(data.inclusionHeight));
+	$('#tokenHolder').show();
+	TokenAnalyzer.reapplyNftInfoStriping();
+}
+
+// Holders, supply, burned state and a 1/1's current owner all come from the token's unspent boxes
+function loadHolders() {
+	TokenApiClient.getUnspentBoxes().then(function(result) {
+		const summary = TokenAnalyzer.summarizeHolders(result.boxes);
+
+		TokenState.holders = summary.holders;
+		TokenState.holderCount = summary.holders.length;
+		TokenState.countedBoxes = result.boxes.length;
+		TokenState.holdersComplete = result.complete;
+		TokenState.supplyInBoxes = result.complete ? summary.total : null;
+		TokenState.holdersLoaded = true;
+
+		if (result.complete && result.boxes.length === 0) {
+			$('[id="tokenBurned"]').show();
+			$('[id="nftCurrentAddressHolder"]').remove();
+			showBurnTx();
+		} else {
+			$('[id="nftBurnTransactionHolder"]').remove();
 		}
 
-		if (typeof addAddress === 'function') addAddress(mintAddress);
-		$('#nftMintedAddress').html('<p><a class="address-string" addr="' + mintAddress + '" href="' + (typeof getWalletAddressUrl === 'function' ? getWalletAddressUrl(mintAddress) : '#') + '">' + (typeof formatLongAddressString === 'function' ? formatLongAddressString(mintAddress) : mintAddress) + '</a></p>');
-
-		$('#nftMintedTransaction').html('<p><a href="' + (typeof getTransactionsUrl === 'function' ? getTransactionsUrl(TokenState.tokenData.transactionId) : '#') + '">' + TokenState.tokenData.transactionId + '</a></p>');
-		$('#nftCreationHeight').html('<p><a href="' + (typeof getBlockUrl === 'function' ? getBlockUrl(TokenState.tokenData.blockId) : '#') + '">' + (typeof nFormatter === 'function' ? nFormatter(TokenState.tokenData.creationHeight, 0, true, true) : TokenState.tokenData.creationHeight) + '</a></p>');
-
-		// NFT links display logic
-		let fullUrl = '';
-		if (!nftInfo.link.ipfsCid) {
-			fullUrl = nftInfo.link.url;
-		}
-		let additionalFullUrl = Array();
-
-		let linkString = fullUrl;
-		const nftLinkMaxLength = typeof NFT_LINK_MAX_LENGTH !== 'undefined' ? NFT_LINK_MAX_LENGTH : 40;
-		if (linkString.length > nftLinkMaxLength) {
-			linkString = typeof formatAddressString === 'function' ? formatAddressString(linkString, nftLinkMaxLength) : linkString;
+		if (String(TokenState.tokenData.emissionAmount) === '1' && summary.holders.length > 0) {
+			TokenState.currentAddress = summary.holders[0].address;
+			$('[id="nftCurrentAddress"]').html(addressLinkHtml(TokenState.currentAddress));
+			$('[id="nftCurrentAddressHolder"]').show();
 		}
 
-		let urlHtml = '';
-		let cidHtml = '';
+		TokenAnalyzer.reapplyNftInfoStriping();
+		TokenUIDisplay.printSupplyInfo();
+		TokenUIDisplay.printHolders();
+	}, function(e) {
+		console.warn('Holders failed', e);
+		TokenUIDisplay.printHoldersFailed();
+	});
+}
+
+// A burned token's newest box is the one its last tx spent
+let burnTxShown = false;
+
+function showBurnTx() {
+	const newest = TokenState.boxes[0];
+
+	if (burnTxShown || !$('#tokenBurned').is(':visible') || !newest || !newest.spentTransactionId) return;
+
+	burnTxShown = true;
+	$('[id="nftBurnTransaction"]').html('<p><a href="' + getTransactionsUrl(newest.spentTransactionId) + '">' + newest.spentTransactionId + '</a></p>');
+	$('[id="nftBurnTransactionHolder"]').show();
+	TokenAnalyzer.reapplyNftInfoStriping();
+}
+
+let boxesLoading = false;
+
+function loadBoxes(offset) {
+	if (boxesLoading) return;
+
+	boxesLoading = true;
+	$('#boxesMoreBtn').prop('disabled', true);
+
+	TokenApiClient.getBoxes(offset).then(function(page) {
+		TokenState.boxes = TokenState.boxes.concat(page.items);
+		TokenState.boxesTotal = page.total;
+		TokenUIDisplay.printBoxes();
+		showBurnTx();
+	}, function(e) {
+		console.warn('Token boxes failed', e);
+		$('#boxesLoading').hide();
+	}).finally(function() {
+		boxesLoading = false;
+		$('#boxesMoreBtn').prop('disabled', false);
+	});
+}
+
+window.loadMoreTokenBoxes = () => loadBoxes(TokenState.boxes.length);
+
+function showNftInfo(nftInfo) {
+	const data = TokenState.tokenData;
+
+	$('#tokenHolder').remove();
+	TokenState.nftType = nftInfo.type;
+
+	$('#nftType').html('<p>' + nftInfo.type + '</p>');
+	$('#nftHash').html('<p>' + (nftInfo.hash || '') + '</p>');
+
+	if (nftInfo.type == NFT_TYPE.ArtCollection || !nftInfo.hash) {
+		$('[id="nftHashHolder"]').remove();
+	}
+
+	$('#nftMintedAddress').html(addressLinkHtml(data.address));
+	$('#nftMintedTransaction').html('<p><a href="' + getTransactionsUrl(data.transactionId) + '">' + data.transactionId + '</a></p>');
+	$('#nftCreationHeight').html(blockLinkHtml(data.inclusionHeight));
+
+	let fullUrl = nftInfo.link.ipfsCid ? '' : nftInfo.link.url;
+	const additionalFullUrl = [];
+	let linkString = fullUrl;
+
+	if (linkString.length > NFT_LINK_MAX_LENGTH) {
+		linkString = formatAddressString(linkString, NFT_LINK_MAX_LENGTH);
+	}
+
+	let urlHtml = '';
+	let cidHtml = '';
+
+	if (nftInfo.link.ipfsCid) {
+		urlHtml = formatIpfsCidHtmlString(nftInfo.link.url);
+		fullUrl = IPFS_GATEWAYS[0] + '/ipfs/' + nftInfo.link.url;
+
+		cidHtml = '<p>CID 1: ' + nftInfo.link.url + '</p>';
+	} else {
+		urlHtml = '<p><a target="_new" href="' + fullUrl + '">' + linkString + '</a></p>';
+		$('#ipfsCidHolder').remove();
+	}
+
+	if (nftInfo.additionalLinks && nftInfo.additionalLinks.length > 0) {
+		let formattedLinksHtml = '<p>URL 1:</p>' + urlHtml;
+
+		for (let i = 0; i < nftInfo.additionalLinks.length; i++) {
+			const additionalLink = nftInfo.additionalLinks[i];
+			let fullAdditionalUrlString = '';
+
+			if (additionalLink.ipfsCid) {
+				fullAdditionalUrlString = formatIpfsCidHtmlString(additionalLink.url);
+				additionalFullUrl.push(IPFS_GATEWAYS[0] + '/ipfs/' + additionalLink.url);
+				cidHtml += '<p>CID ' + (i + 2) + ': ' + additionalLink.url + '</p>';
+			} else {
+				fullAdditionalUrlString = '<a target="_new" href="' + additionalLink.url + '">' + formatAddressString(additionalLink.url, NFT_LINK_MAX_LENGTH) + '</a>';
+				additionalFullUrl.push(additionalLink.url);
+			}
+
+			formattedLinksHtml += '<br><p>URL ' + (i + 2) + ': </p>' + fullAdditionalUrlString;
+		}
+
+		$('#nftLink').html(formattedLinksHtml);
+		$('#ipfsCid').html(cidHtml);
+	} else {
+		$('#nftLink').html(urlHtml);
 
 		if (nftInfo.link.ipfsCid) {
-			urlHtml = typeof formatIpfsCidHtmlString === 'function' ? formatIpfsCidHtmlString(nftInfo.link.url) : nftInfo.link.url;
-
-			const ipfsHosts = typeof IPFS_PROVIDER_HOSTS !== 'undefined' ? IPFS_PROVIDER_HOSTS : ['https://nftstorage.link', 'https://gateway.pinata.cloud'];
-			for (let i = 0; i < ipfsHosts.length; i++) {
-				fullUrl = ipfsHosts[i] + '/ipfs/' + nftInfo.link.url;
-
-				if (nftInfo.type == (typeof NFT_TYPE !== 'undefined' ? NFT_TYPE.Image : 'Image')) {
-					let urlToCheck = fullUrl;
-					if (typeof checkLinkExists === 'function') {
-						checkLinkExists(urlToCheck).then(exists => {
-							if (exists) {
-								TokenState.imageUrl = urlToCheck;
-								if (!nftInfo.data.nsfw) {
-									$('#nftPreviewImg').attr('src', TokenState.imageUrl);
-									$('#nftImageFull').attr('src', TokenState.imageUrl);
-								}
-							}
-						});
-					}
-				}
-
-				if (nftInfo.type == (typeof NFT_TYPE !== 'undefined' ? NFT_TYPE.Audio : 'Audio') && typeof isAudioPlayable === 'function' && isAudioPlayable(fullUrl)) {
-					break;
-				} else if (nftInfo.type == (typeof NFT_TYPE !== 'undefined' ? NFT_TYPE.Video : 'Video') && typeof isVideoPlayable === 'function' && isVideoPlayable(fullUrl)) {
-					break;
-				} else {
-					if (i == ipfsHosts.length - 1) {
-						fullUrl = ipfsHosts[0] + '/ipfs/' + nftInfo.link.url;
-					}
-				}
-			}
-
-			cidHtml = `<p>CID 1: ${nftInfo.link.url}</p>`;
-		} else {
-			urlHtml = '<p><a  target="_new" href="' + fullUrl + '">' + linkString + '</a></p>';
-			$('#ipfsCidHolder').remove();
+			$('#ipfsCid').html('<p>' + nftInfo.link.url + '</p>');
 		}
-
-		if (nftInfo.additionalLinks && nftInfo.additionalLinks.length > 0) {
-			let formattedLinksHtml = '<p>URL 1:</p>' + urlHtml;
-
-			for (let i = 0; i < nftInfo.additionalLinks.length; i++) {
-				let additionalLink = nftInfo.additionalLinks[i];
-				let fullAdditionalUrlString = '';
-				
-				if (additionalLink.ipfsCid) {
-					fullAdditionalUrlString = typeof formatIpfsCidHtmlString === 'function' ? formatIpfsCidHtmlString(additionalLink.url) : additionalLink.url;
-					const ipfsHosts = typeof IPFS_PROVIDER_HOSTS !== 'undefined' ? IPFS_PROVIDER_HOSTS : ['https://nftstorage.link'];
-					additionalFullUrl.push(ipfsHosts[0] + '/ipfs/' + additionalLink.url);
-					cidHtml += `<p>CID ${i + 2}: ${additionalLink.url}</p>`;
-				} else {
-					let additionalLinkString = typeof formatAddressString === 'function' ? formatAddressString(additionalLink.url, nftLinkMaxLength) : additionalLink.url;
-					fullAdditionalUrlString = '<a  target="_new" href="' + additionalLink.url + '">' + additionalLinkString + '</a>';
-					additionalFullUrl.push(additionalLink.url);
-				}
-
-				formattedLinksHtml += '<br><p>URL ' + (i + 2) + ': </p>' + fullAdditionalUrlString;
-			}
-
-			$('#nftLink').html(formattedLinksHtml);
-			$('#ipfsCid').html(cidHtml);
-		} else {
-			$('#nftLink').html(urlHtml);
-			if (nftInfo.link.ipfsCid) {
-				$('#ipfsCid').html(`<p>${nftInfo.link.url}</p>`);
-			}
-		}
-
-		TokenState.imageUrl = fullUrl;
-		if (nftInfo.cachedurl) {
-			TokenState.imageUrl = nftInfo.cachedurl;
-		}
-
-		if (nftInfo.type == (typeof NFT_TYPE !== 'undefined' ? NFT_TYPE.Image : 'Image')) {
-			if (!nftInfo.data.nsfw) {
-				$('#nftPreviewImg').attr('src', TokenState.imageUrl);
-				$('#nftImageFull').attr('src', TokenState.imageUrl);
-			} else {
-				$('#nftPreviewImgNsfw').attr('src', 'https://thumbs.dreamstime.com/b/nsfw-sign-not-safe-work-censorship-vector-stock-illustration-nsfw-sign-not-safe-work-censorship-vector-stock-illustration-245733305.jpg');
-				$('#nftPreviewImgNsfw').show();
-			}
-
-			$('#nftPreviewImg').show();
-
-			if (nftInfo.link.url.substr(0, 19) == 'data:image/svg+xml;') {
-				$('#nftPreviewImg').css('width', '200px');
-				$('#nftImageFull').css('width', '400px');
-			}
-		} else if (nftInfo.type == (typeof NFT_TYPE !== 'undefined' ? NFT_TYPE.Audio : 'Audio')) {
-			$('#nftPreviewAudioSource').attr('src', fullUrl);
-			$('#nftPreviewAudio').show();
-			let audioElem = document.getElementById('nftAudio');
-			if (audioElem) audioElem.load();
-
-			$('#nftPreviewImgHolder').hide();
-			$('#nftPreviewImgHolder').removeClass('col-lg-3');
-			$('#nftInfoHolder').removeClass('col-lg-9');
-			
-			if (nftInfo.cachedurl) {
-				$('#nftPreviewImg').attr('src', nftInfo.cachedurl);
-				$('#nftImageFull').attr('src', nftInfo.cachedurl);
-			} else if (additionalFullUrl.length > 0) {
-				$('#nftPreviewImg').attr('src', additionalFullUrl[0]);
-				$('#nftImageFull').attr('src', additionalFullUrl[0]);
-			}
-		} else if (nftInfo.type == (typeof NFT_TYPE !== 'undefined' ? NFT_TYPE.Video : 'Video')) {
-			$('#nftPreviewVideoSource').attr('src', fullUrl);
-			$('#nftPreviewVideo').show();
-			let videoElem = document.getElementById('nftPreviewVideo');
-			if (videoElem) videoElem.load();
-
-			$('#nftPreviewImgHolder').removeClass('col-lg-3');
-			$('#nftInfoHolder').removeClass('col-lg-9');
-			$('#nftPreviewImgHolder').addClass('col-xl-5');
-			$('#nftInfoHolder').addClass('col-xl-7');
-			$('#nftPreviewImgHolder').css('min-height', '0');
-		} else {
-			$('#nftPreviewImgHolder').hide();
-			$('#nftInfoHolder').removeClass('col-lg-9');
-			$('#nftInfoHolder').addClass('col-12');
-			$('#nftPreviewImgHolder').css('min-height', '0');
-		}
-
-		if (typeof networkType !== 'undefined' && networkType == 'mainnet') {
-			if (nftInfo.type == (typeof NFT_TYPE !== 'undefined' ? NFT_TYPE.ArtCollection : 'Art collection')) {
-				$('#nftAuction').html('<p>View on <a  target="_new" href="https://ergoauctions.org/collection/' + TokenState.tokenData.id + '">Ergoauctions.org</a></p>');
-			} else {
-				$('#nftAuction').html('<p>View on <a  target="_new" href="https://www.skyharbor.io/token/' + TokenState.tokenData.id + '">SkyHarbor.io</a></p><p>View on <a  target="_new" href="https://ergoauctions.org/artwork/' + TokenState.tokenData.id + '">Ergoauctions.org</a></p>');
-			}
-		} else {
-			$('#marketplaceHolder').remove();
-		}
-
-		$('#nftHolder').show();
-		TokenAnalyzer.reapplyNftInfoStriping();
-	} else {
-		$('#nftHolder').remove();
-		$('#nftType').html('<p>Token</p>');
-		
-		// Mint address
-		let mintAddress = TokenState.tokenData.address;
-		if (TokenState.tokenData.mintWallet != null) {
-			mintAddress = TokenState.tokenData.mintWallet;
-		}
-
-		$('#nftMintedAddress').html('<p><a href="' + (typeof getWalletAddressUrl === 'function' ? getWalletAddressUrl(mintAddress) : '#') + '">' + mintAddress + '</a></p>');
-		$('#nftMintedTransaction').html('<p><a href="' + (typeof getTransactionsUrl === 'function' ? getTransactionsUrl(TokenState.tokenData.transactionId) : '#') + '">' + TokenState.tokenData.transactionId + '</a></p>');
-		$('#nftCreationHeight').html('<p><a href="' + (typeof getBlockUrl === 'function' ? getBlockUrl(TokenState.tokenData.blockId) : '#') + '">' + (typeof nFormatter === 'function' ? nFormatter(TokenState.tokenData.creationHeight, 0, true, true) : TokenState.tokenData.creationHeight) + '</a></p>');
-
-		$('#tokenHolder').show();
 	}
 
-	// Fetch holders, transactions, and prices for ALL tokens (including NFTs)
-	TokenApiClient.getPriceHistory().then(() => {
-		TokenUIDisplay.printSupplyInfo();
-		if (TokenState.hasPrice) {
-			TokenUIControllers.printGainersLosers(0);
+	TokenState.imageUrl = fullUrl;
+
+	const cid = nftInfo.link.ipfsCid ? nftInfo.link.url : null;
+
+	if (nftInfo.type == NFT_TYPE.Image) {
+		$('#nftPreviewImg').show();
+
+		showImageFrom(cid ? IPFS_GATEWAYS.map(host => host + '/ipfs/' + cid) : [fullUrl]);
+
+		if (nftInfo.link.url.substr(0, 19) == 'data:image/svg+xml;') {
+			$('#nftPreviewImg').css('width', '200px');
+			$('#nftImageFull').css('width', '400px');
 		}
+	} else if (nftInfo.type == NFT_TYPE.Audio) {
+		playFrom(document.getElementById('nftAudio'), $('#nftPreviewAudioSource')[0], cid ? IPFS_GATEWAYS.map(host => host + '/ipfs/' + cid) : [fullUrl]);
+		$('#nftPreviewAudio').show();
 
-		TokenApiClient.getTxsData().then(txs => {
-			if (txs && txs.length > 0) TokenUIDisplay.printTxs(txs);
-		}).catch(error => console.error('TXs error:', error));
+		$('#nftPreviewImgHolder').hide().removeClass('col-lg-3');
+		$('#nftInfoHolder').removeClass('col-lg-9');
 
-		if (TokenState.isLpToken) {
-			TokenUIDisplay.hideSwaps();
-		} else {
-			TokenApiClient.getSwapsData().then(swaps => {
-				if (swaps && swaps.length > 0) TokenUIDisplay.printSwaps(swaps);
-			}).catch(error => console.error('Swaps error:', error));
+		// An audio NFT's second link is usually its cover
+		if (additionalFullUrl.length > 0) {
+			$('#nftPreviewImg').attr('src', additionalFullUrl[0]);
+			$('#nftImageFull').attr('src', additionalFullUrl[0]);
 		}
+	} else if (nftInfo.type == NFT_TYPE.Video) {
+		playFrom(document.getElementById('nftPreviewVideo'), $('#nftPreviewVideoSource')[0], cid ? IPFS_GATEWAYS.map(host => host + '/ipfs/' + cid) : [fullUrl]);
+		$('#nftPreviewVideo').show();
 
-		TokenApiClient.getHolders().then(holders => {
-			if (holders && holders.length > 0) TokenUIDisplay.printHolders(holders);
-		}).catch(error => console.log('Error fetching holders:', error));
+		$('#nftPreviewImgHolder').removeClass('col-lg-3').addClass('col-xl-5').css('min-height', '0');
+		$('#nftInfoHolder').removeClass('col-lg-9').addClass('col-xl-7');
+	} else {
+		$('#nftPreviewImgHolder').hide().css('min-height', '0');
+		$('#nftInfoHolder').removeClass('col-lg-9').addClass('col-12');
+	}
 
-		TokenApiClient.getHolderCount().then(count => {
-			if (count !== null && count !== undefined) TokenUIDisplay.printHolderCount(count);
-		}).catch(error => console.log('Error fetching holder count:', error));
-	});
+	$('#nftHolder').show();
+	TokenAnalyzer.reapplyNftInfoStriping();
+}
 
-	// Set external links
-	TokenUIControllers.setLinks();
+function traitCard(label, value) {
+	return '<div class="bg-background" style="padding:5px; border-radius:5px;box-sizing: border-box; place-content: space-between;text-align:center;">'
+		+ '<p class="erg-span">' + escapeHtml(label) + '</p><p>' + escapeHtml(value) + '</p></div>';
+}
 
-	// Fetch additional registers for NFT properties/social links
-	const apiHost = typeof API_HOST !== 'undefined' ? API_HOST : 'https://api.ergoplatform.com/api/v1/';
-	const baseUrl = apiHost.endsWith('/') ? apiHost : apiHost + '/';
-	
-	$.get(`${baseUrl}transactions/${TokenState.tokenData.transactionId}`, function (data) {
-		if (!data || !data.inputs || data.inputs.length === 0) return;
-		
-		const hexString = data.inputs[0].additionalRegisters?.R6?.serializedValue;
-		if (!hexString || typeof qfleetSDK === 'undefined') return;
+// Descriptions may be JSON, so quotes stay as they are
+function escapeMarkup(text) {
+	return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeHtml(text) {
+	return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// EIP-24 keeps an NFT's traits (or a collection's social links) in R6 of the box its mint spent first
+function loadIssuerRegisters() {
+	TokenApiClient.getIssuerBox().then(function(box) {
+		const regs = box && box.additionalRegisters;
+		const r6 = regs && (typeof regs.R6 === 'string' ? regs.R6 : regs.R6 && regs.R6.serializedValue);
+
+		if (!r6) return;
+
+		let constant;
 
 		try {
-			const Constant = qfleetSDK.SConstant;
-			const bytes = typeof hexToBytes === 'function' ? hexToBytes(hexString) : [];
-			const constant = Constant.from(bytes);
-
-			if (TokenState.nftType == (typeof NFT_TYPE !== 'undefined' ? NFT_TYPE.ArtCollection : 'Art collection')) {
-				if (constant && constant.data && constant.data.length > 0) {
-					let hasTwitter = false;
-					let hasInstagram = false;
-
-					for (let array of constant.data) {
-						if (typeof bytesToString !== 'function') break;
-						let key = bytesToString(array[0]);
-						let value = bytesToString(array[1]);
-						
-						if (key == 'instagram') {
-							$('#instagramLink').prop('href', 'https://www.instagram.com/' + value.replace('@', ''));
-							$('#instagramLink').html(value);
-							$('#instagramHolder').show();
-							hasInstagram = true;
-						} else if (key == 'twitter') {
-							$('#twitterLink').prop('href', 'https://twitter.com/' + value.replace('@', ''));
-							$('#twitterLink').html(value);
-							$('#twitterHolder').show();
-							hasTwitter = true;
-						}
-					}
-
-					if (!hasTwitter) $('#twitterHolder').remove();
-					if (!hasInstagram) $('#instagramHolder').remove();
-				}
-			} else {
-				let properties = '';
-				let stats = '';
-				let levels = '';
-				
-				if (constant && constant.data && (
-					constant.data[0] || (constant.data[1] && (constant.data[1][0] || constant.data[1][1]))
-				)) {
-					// Properties
-					try {
-						if (constant.data[0] && constant.data[0].length > 0) {			    	
-							for (let array of constant.data[0]) {
-								if (typeof bytesToString !== 'function') break;
-								properties += `<div class="bg-background" style="padding:5px; border-radius:5px;box-sizing: border-box; place-content: space-between;text-align:center;">`
-								properties += `<p class="erg-span">${bytesToString(array[0])}</p>`;
-								properties += `<p>${bytesToString(array[1])}</p>`;
-								properties += '</div>';
-							}
-							$('#nftPropertiesHolder').show();
-							$('#nftProperties').html(properties);
-						}
-					} catch (e) { $('#nftPropertiesHolder').hide(); }
-
-					// Stats
-					try {
-						if (constant.data[1] && constant.data[1][0] && constant.data[1][0].length > 0) {			    	
-							for (let array of constant.data[1][0]) {
-								if (typeof bytesToString !== 'function') break;
-								stats += `<div class="bg-background" style="padding:5px; border-radius:5px;box-sizing: border-box; place-content: space-between;text-align:center;">`
-								stats += `<p class="erg-span">${bytesToString(array[0])}</p>`;
-								stats += `<p>${array[1][0]} of ${array[1][1]}</p>`;
-								stats += '</div>';
-							}
-							$('#nftStatsHolder').show();
-							$('#nftStats').html(stats);
-						}
-					} catch (e) { $('#nftStatsHolder').hide(); }
-
-					// Levels
-					try {
-						if (constant.data[1] && constant.data[1][1] && constant.data[1][1].length > 0) {			    	
-							for (let array of constant.data[1][1]) {
-								if (typeof bytesToString !== 'function') break;
-								levels += `<div class="bg-background" style="padding:5px; border-radius:5px;box-sizing: border-box; place-content: space-between;text-align:center;">`
-								levels += `<p class="erg-span">${bytesToString(array[0])}</p>`;
-								levels += `<p>${array[1][0]} of ${array[1][1]}</p>`;
-								levels += '</div>';
-							}
-							$('#nftLevelsHolder').show();
-							$('#nftLevels').html(levels);
-						}
-					} catch (e) { $('#nftLevelsHolder').hide(); }
-				}
-			}
-			TokenAnalyzer.reapplyNftInfoStriping();
+			constant = qfleetSDK.SConstant.from(hexToBytes(r6));
 		} catch (e) {
-			console.error('Error deserializing R6:', e);
+			return;
 		}
+
+		const data = constant && constant.data;
+		if (!data || !data.length) return;
+
+		try {
+			if (TokenState.nftType == NFT_TYPE.ArtCollection) {
+				showSocialLinks(data);
+			} else {
+				showTraits(data);
+			}
+		} catch (e) {
+			console.warn('Could not read NFT traits', e);
+		}
+
+		TokenAnalyzer.reapplyNftInfoStriping();
 	});
-};
+}
 
+function showSocialLinks(data) {
+	let hasTwitter = false;
+	let hasInstagram = false;
 
-// Token icon loaded callback
+	for (const pair of data) {
+		const key = bytesToString(pair[0]);
+		const value = bytesToString(pair[1]);
+
+		if (key == 'instagram') {
+			$('#instagramLink').prop('href', 'https://www.instagram.com/' + value.replace('@', '')).text(value);
+			$('#instagramHolder').show();
+			hasInstagram = true;
+		} else if (key == 'twitter') {
+			$('#twitterLink').prop('href', 'https://twitter.com/' + value.replace('@', '')).text(value);
+			$('#twitterHolder').show();
+			hasTwitter = true;
+		}
+	}
+
+	if (!hasTwitter) $('#twitterHolder').remove();
+	if (!hasInstagram) $('#instagramHolder').remove();
+}
+
+function showTraits(data) {
+	const properties = Array.isArray(data[0]) ? data[0] : [];
+	const numeric = Array.isArray(data[1]) ? data[1] : [];
+	const stats = Array.isArray(numeric[0]) ? numeric[0] : [];
+	const levels = Array.isArray(numeric[1]) ? numeric[1] : [];
+
+	if (properties.length > 0) {
+		$('#nftProperties').html(properties.map(pair => traitCard(bytesToString(pair[0]), bytesToString(pair[1]))).join(''));
+		$('#nftPropertiesHolder').show();
+	}
+
+	if (stats.length > 0) {
+		$('#nftStats').html(stats.map(pair => traitCard(bytesToString(pair[0]), pair[1][0] + ' of ' + pair[1][1])).join(''));
+		$('#nftStatsHolder').show();
+	}
+
+	if (levels.length > 0) {
+		$('#nftLevels').html(levels.map(pair => traitCard(bytesToString(pair[0]), pair[1][0] + ' of ' + pair[1][1])).join(''));
+		$('#nftLevelsHolder').show();
+	}
+}
+
 window.onTokenIconLoaded = function() {
-	$('#tokenDescriptionHolderRight').removeClass('col-xl-10 col-lg-9');
-	$('#tokenDescriptionHolderRight').addClass('col-xl-8 col-lg-7');
-
-	$('#tokenIcon').addClass('col-12');
-	$('#tokenIcon').addClass('col-lg-2');
-	$('#tokenIcon').addClass('d-flex');
-	$('#tokenIcon').show();
+	$('#tokenDescriptionHolderRight').removeClass('col-xl-10 col-lg-9').addClass('col-xl-8 col-lg-7');
+	$('#tokenIcon').addClass('col-12 col-lg-2 d-flex').show();
 };
 
-// NFT image loaded callback
+// An audio NFT's cover image shows once it loads
 window.onNftImageLoad = function() {
-	if (TokenState.nftType != (typeof NFT_TYPE !== 'undefined' ? NFT_TYPE.Audio : 'Audio')) {
-		return;
-	}
+	if (TokenState.nftType != NFT_TYPE.Audio) return;
 
-	$('#nftPreviewImgHolder').show();
+	$('#nftPreviewImgHolder').show().removeClass('col-lg-3').addClass('col-lg-4');
 	$('#nftPreviewImg').show();
-	$('#nftPreviewImgHolder').removeClass('col-lg-3');
-	$('#nftInfoHolder').removeClass('col-lg-9');
-
-	$('#nftPreviewImgHolder').addClass('col-lg-4');
-	$('#nftInfoHolder').addClass('col-lg-8');
+	$('#nftInfoHolder').removeClass('col-lg-9').addClass('col-lg-8');
 };
 
-// Helper function to check if audio is playable
-function isAudioPlayable(audioUrl) {
-	const audio = new Audio();
-	const mimeType = getMimeType(audioUrl);
+// IPFS gateways in the order tried: Lighthouse answers reliably, the others are fallbacks
+const IPFS_GATEWAYS = ['https://gateway.lighthouse.storage'].concat(IPFS_PROVIDER_HOSTS.filter(host => host != 'https://gateway.lighthouse.storage'));
+const MEDIA_TIMEOUT_MS = 15000;
 
-	let a = audioUrl;
-	audio.addEventListener("canplaythrough", (event) => {
-		// If the main audio element doesn't have a source yet, or is using flaky nftstorage
-		// and we've found a better working gateway, switch to it.
-		const currentSrc = $('#nftAudio').attr('src') || $('#nftPreviewAudioSource').attr('src') || '';
-		if ((!currentSrc || currentSrc.includes('nftstorage')) && !a.includes('nftstorage')) {
-			console.log('[Audio] Switching to better gateway:', a);
-			$('#nftAudio').attr('src', a);
-			$('#nftPreviewAudioSource').attr('src', a);
-			let audioElem = document.getElementById('nftAudio');
-			if (audioElem) audioElem.load();
+// Shows the first of the urls that loads, trying them one at a time
+function showImageFrom(urls, index = 0) {
+	if (index >= urls.length) return;
+
+	const probe = new Image();
+	let done = false;
+	const next = () => {
+		if (done) return;
+		done = true;
+		showImageFrom(urls, index + 1);
+	};
+	const timer = setTimeout(next, MEDIA_TIMEOUT_MS);
+
+	probe.onload = () => {
+		if (done) return;
+		done = true;
+		clearTimeout(timer);
+		TokenState.imageUrl = urls[index];
+		$('#nftPreviewImg').attr('src', urls[index]);
+		$('#nftImageFull').attr('src', urls[index]);
+	};
+	probe.onerror = () => {
+		clearTimeout(timer);
+		next();
+	};
+	probe.src = urls[index];
+}
+
+// Plays from the first url, moving on to the next when the source fails
+function playFrom(player, source, urls) {
+	let index = 0;
+
+	source.addEventListener('error', () => {
+		if (++index < urls.length) {
+			source.src = urls[index];
+			player.load();
 		}
 	});
 
-	audio.src = audioUrl;
-
-	// Always return false to ensure the loop in onGetNftInfoDone continues to check all gateways
-	return false;
+	source.src = urls[0];
+	player.load();
 }
 
-// Helper function to check if video is playable
-function isVideoPlayable(videoUrl) {
-	const video = document.createElement('video');
-	const mimeType = getMimeType(videoUrl);
-
-	let v = videoUrl;
-	video.addEventListener("canplaythrough", (event) => {
-		const currentSrc = $('#nftPreviewVideo').attr('src') || $('#nftPreviewVideoSource').attr('src') || '';
-		if ((!currentSrc || currentSrc.includes('nftstorage')) && !v.includes('nftstorage')) {
-			console.log('[Video] Switching to better gateway:', v);
-			$('#nftPreviewVideo').attr('src', v);
-			$('#nftPreviewVideoSource').attr('src', v);
-			let videoElem = document.getElementById('nftPreviewVideo');
-			if (videoElem) videoElem.load();
-		}
-	});
-
-	video.src = videoUrl;
-	return false;
-}
-
-// Helper function to get the MIME type based on the file extension
-function getMimeType(url) {
-	if (!url) return '';
-	if (url.includes('/ipfs/') && !url.includes('.')) return 'audio/mpeg';
-	const extension = url.split('.').pop().toLowerCase();
-	switch (extension) {
-		case 'mp3':
-			return 'audio/mpeg';
-		case 'wav':
-			return 'audio/wav';
-		case 'ogg':
-			return 'audio/ogg';
-		case 'aac':
-			return 'audio/aac';
-		case 'mp4':
-			return 'video/mp4';
-		case 'webm':
-			return 'video/webm';
-		case 'ogv':
-			return 'video/ogg';
-		default:
-			return '';
-	}
-}
-
-// Expose UI controllers to window for HTML onclick handlers
 window.copyTokenAddress = (e) => TokenUIControllers.copyTokenAddress(e);
 window.showFullImgPreview = () => TokenUIControllers.showFullImgPreview();
 window.hideFullImgPreview = () => TokenUIControllers.hideFullImgPreview();
 window.showImage = () => TokenUIControllers.showImage();
-window.toggleChart = () => TokenUIControllers.toggleChart();
-window.printGainersLosers24h = () => TokenUIControllers.printGainersLosers24h();
-window.printGainersLosers7d = () => TokenUIControllers.printGainersLosers7d();
-window.printGainersLosers30d = () => TokenUIControllers.printGainersLosers30d();
-window.calculateTransferredAmount = (tx) => TokenAnalyzer.calculateTransferredAmount(tx);
