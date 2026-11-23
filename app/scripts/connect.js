@@ -1,4 +1,7 @@
 // The connect page: test a node, save it, and go back to where the visitor was headed
+
+// Offered as one-click choices, never picked for the visitor
+const SUGGESTED_NODES = ['https://node-p2p.ergoplatform.com'];
 $(function() {
 	setDocumentTitle('Pick your node');
 
@@ -9,6 +12,7 @@ $(function() {
 	}
 
 	renderSavedNodes();
+	renderSuggestedNodes();
 
 	$('#connectForm').on('submit', function(e) {
 		e.preventDefault();
@@ -99,4 +103,20 @@ function renderSavedNodes() {
 	}
 
 	$('#savedNodes').show();
+}
+
+function renderSuggestedNodes() {
+	const box = $('#suggestedNodes');
+
+	SUGGESTED_NODES.forEach(function(url, i) {
+		const link = $('<a href="#"></a>').text(new URL(url).host);
+
+		link.on('click', function(e) {
+			e.preventDefault();
+			$('#nodeUrlInput').val(url);
+			connect(url);
+		});
+
+		box.append(i > 0 ? ', ' : '', link);
+	});
 }
