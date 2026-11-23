@@ -126,6 +126,8 @@ function renderSuggestedNodes() {
 /* What the connected node says about itself, refreshed while the page is open */
 
 const NODE_INFO_REFRESH_MS = 30000;
+const NODE_INFO_RETRY_MS = 5000;
+const NODE_INFO_TIMEOUT_MS = 8000;
 
 async function showNodeInfo() {
 	if (!LiteNode.getUrl()) {
@@ -134,13 +136,14 @@ async function showNodeInfo() {
 
 	try {
 		const [info, indexed] = await Promise.all([
-			LiteNode.get('info'),
-			LiteNode.get('blockchain/indexedHeight').catch(() => null)
+			LiteNode.get('info', { timeout: NODE_INFO_TIMEOUT_MS }),
+			LiteNode.get('blockchain/indexedHeight', { timeout: NODE_INFO_TIMEOUT_MS })
+				.catch(e => e.kind == 'notfound' ? 'off' : null)
 		]);
 
 		const height = Number(info.fullHeight);
 		const headers = Number(info.headersHeight);
-		const indexedHeight = indexed ? Number(indexed.indexedHeight) : null;
+		const indexedHeight = indexed && indexed != 'off' ? Number(indexed.indexedHeight) : null;
 		const behind = indexedHeight == null ? null : height - indexedHeight;
 
 		const rows = [
@@ -148,7 +151,7 @@ async function showNodeInfo() {
 			['Version', info.appVersion],
 			['Network', info.network == 'testnet' ? 'Testnet' : 'Mainnet'],
 			['Height', height.toLocaleString('en-US') + (headers > height ? ' of ' + headers.toLocaleString('en-US') : '')],
-			['Index', behind == null ? 'Off' : (behind > 2 ? behind.toLocaleString('en-US') + ' blocks behind' : 'Synced')],
+			['Index', indexed == 'off' ? 'Off' : (behind == null ? '-' : (behind > 2 ? behind.toLocaleString('en-US') + ' blocks behind' : 'Synced'))],
 			['Peers', info.peersCount],
 			['Mempool', Number(info.unconfirmedCount).toLocaleString('en-US') + (Number(info.unconfirmedCount) == 1 ? ' transaction' : ' transactions')],
 			['State', info.stateType == 'digest' ? 'Digest' : 'UTXO'],
@@ -168,11 +171,12 @@ async function showNodeInfo() {
 		}
 
 		$('#nodeInfo').show();
+		setTimeout(showNodeInfo, NODE_INFO_REFRESH_MS);
 	} catch (e) {
-		$('#nodeInfo').hide();
+		// Keep the last values on screen; some public nodes drop a request now and then
+		console.warn('Node info failed', e);
+		setTimeout(showNodeInfo, NODE_INFO_RETRY_MS);
 	}
-
-	setTimeout(showNodeInfo, NODE_INFO_REFRESH_MS);
 }
 
 function formatUptime(ms) {

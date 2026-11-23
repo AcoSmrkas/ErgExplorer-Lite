@@ -52,6 +52,11 @@
 	display: none;
 }
 
+/* Room above the fixed footer (.row margins are forced to 0, so the wrapper carries it) */
+.connect-page {
+	padding-bottom: 24px;
+}
+
 .connect-card {
 	padding: 28px 24px;
 }
