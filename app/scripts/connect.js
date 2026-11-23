@@ -13,6 +13,7 @@ $(function() {
 
 	renderSavedNodes();
 	renderSuggestedNodes();
+	showNodeInfo();
 
 	$('#connectForm').on('submit', function(e) {
 		e.preventDefault();
@@ -120,4 +121,68 @@ function renderSuggestedNodes() {
 
 		box.append(link);
 	});
+}
+
+/* What the connected node says about itself, refreshed while the page is open */
+
+const NODE_INFO_REFRESH_MS = 30000;
+
+async function showNodeInfo() {
+	if (!LiteNode.getUrl()) {
+		return;
+	}
+
+	try {
+		const [info, indexed] = await Promise.all([
+			LiteNode.get('info'),
+			LiteNode.get('blockchain/indexedHeight').catch(() => null)
+		]);
+
+		const height = Number(info.fullHeight);
+		const headers = Number(info.headersHeight);
+		const indexedHeight = indexed ? Number(indexed.indexedHeight) : null;
+		const behind = indexedHeight == null ? null : height - indexedHeight;
+
+		const rows = [
+			['Name', info.name],
+			['Version', info.appVersion],
+			['Network', info.network == 'testnet' ? 'Testnet' : 'Mainnet'],
+			['Height', height.toLocaleString('en-US') + (headers > height ? ' of ' + headers.toLocaleString('en-US') : '')],
+			['Index', behind == null ? 'Off' : (behind > 2 ? behind.toLocaleString('en-US') + ' blocks behind' : 'Synced')],
+			['Peers', info.peersCount],
+			['Mempool', Number(info.unconfirmedCount).toLocaleString('en-US') + (Number(info.unconfirmedCount) == 1 ? ' transaction' : ' transactions')],
+			['State', info.stateType == 'digest' ? 'Digest' : 'UTXO'],
+			['Mining', info.isMining ? 'Yes' : 'No'],
+			['Up for', formatUptime(Number(info.currentTime) - Number(info.launchTime))]
+		];
+
+		const list = $('#nodeInfoList').empty();
+
+		for (const [label, value] of rows) {
+			const text = value == null || value === '' ? '-' : String(value);
+
+			list.append($('<div class="node-info-row"></div>').append(
+				$('<dt></dt>').text(label),
+				$('<dd></dd>').text(text).attr('title', text)
+			));
+		}
+
+		$('#nodeInfo').show();
+	} catch (e) {
+		$('#nodeInfo').hide();
+	}
+
+	setTimeout(showNodeInfo, NODE_INFO_REFRESH_MS);
+}
+
+function formatUptime(ms) {
+	if (!(ms > 0)) return '-';
+
+	const minutes = Math.floor(ms / 60000);
+	const hours = Math.floor(minutes / 60);
+	const days = Math.floor(hours / 24);
+
+	if (days >= 1) return days + (days == 1 ? ' day' : ' days');
+	if (hours >= 1) return hours + (hours == 1 ? ' hour' : ' hours');
+	return minutes + (minutes == 1 ? ' minute' : ' minutes');
 }

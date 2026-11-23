@@ -21,6 +21,11 @@
 
 				<div id="connectStatus" class="connect-status" style="display: none;"></div>
 
+				<div id="nodeInfo" class="node-info" style="display: none;">
+					<div class="saved-nodes-label">Connected node</div>
+					<dl id="nodeInfoList" class="node-info-list"></dl>
+				</div>
+
 				<div id="savedNodes" class="saved-nodes" style="display: none;">
 					<div class="saved-nodes-label">Your nodes</div>
 					<div id="savedNodesList"></div>
@@ -40,5 +45,5 @@
 {% endblock %}
 
 {% block scripts %}
-	<script src="./scripts/connect.js?v=6"></script>
+	<script src="./scripts/connect.js?v=7"></script>
 {% endblock %}
