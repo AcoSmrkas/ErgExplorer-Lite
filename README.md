@@ -30,5 +30,12 @@ Content-Security-Policy in the layout blocks other script, style and font hosts.
 
 ## Run it next to your node
 
-Serve `dist/` with any static web server that falls back to the page file for paths like
-`/transactions/<id>`. The included `.htaccess` does this for Apache.
+Download the zip from [Releases](https://github.com/AcoSmrkas/ErgExplorer-Lite/releases), unpack it and run
+
+```
+python3 serve.py
+```
+
+then open http://localhost:8080 and pick your node (`http://<node-ip>:9053` works from here).
+`serve.py` answers paths like `/transactions/<id>` with the page file. On Apache, the included
+`.htaccess` does the same. A release zip is `dist/` plus `serve.py`.
