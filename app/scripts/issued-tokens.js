@@ -1,254 +1,194 @@
-const TOKEN_TYPE_PARAM = 'type';
-const ORDER_BY_PARAM = 'order';
-const UTILITY_TOKEN_PATAM = 'hideUtility';
-const BURNED_TOKEN_PATAM = 'hideBurned';
-var tokenType = 'all';
-var query = '';
-var hideUtility = false;
-var hideBurned = false;
-var orderBy = false;
-var setup = true;
+// Recently minted tokens, found by walking back through recent blocks on the node. A node has no
+// token index to search by name, so this lists mints newest first: a new token takes the id of its
+// tx's first input box. Each step reads BLOCKS_PER_STEP blocks, BLOCK_BATCH at a time.
+const BLOCKS_PER_STEP = 30;
+const BLOCK_BATCH = 10;
 
-updateUi();
+var nextHeight = null;
+var oldestScanned = null;
+var newestScanned = null;
+var shownTokens = 0;
+var scanning = false;
 
 $(function() {
-    printIssuedTokens();
+	$('#tokenIdInput').on('keydown', function(e) {
+		if (e.key === 'Enter') openTokenId();
+	});
 
-    $('#searchInput').val(decodeURIComponent(query));
-
-    setup = false;
+	loadMoreTokens();
 });
 
-function updateUi() {
-    query = params['query']?.replace(/#/g, '%23');
-    if (query == undefined) {
-        query = '';
-    }
+function openTokenId() {
+	const id = ($('#tokenIdInput').val() || '').trim().toLowerCase();
 
-    if (networkType == 'testnet') {
-        $('#search').remove();
-    }
+	if (!/^[0-9a-f]{64}$/.test(id)) {
+		$('#tokenIdError').text('Enter a 64-character token ID.').show();
+		return;
+	}
 
-    setupOrderSelect();
-    setupTypeSelect();
-    setupToggleBurnedTokens();
-    setupToggleUtilityTokens();
+	$('#tokenIdError').hide();
+	goToTokenUrl(id);
 }
 
-function printIssuedTokens() {
-    let tokensSearchUrl = 'https://api2.ergexplorer.com/tokens/search?limit=' + ITEMS_PER_PAGE + '&offset=' + offset + '&query=' + query + '&type=' + tokenType + '&hideUtility=' + hideUtility + '&order=' + orderBy + '&hideBurned=' + hideBurned;
-
-    if (networkType == 'testnet') {
-        tokensSearchUrl = API_HOST + 'api/v1/tokens?limit=' + ITEMS_PER_PAGE + '&offset=' + offset;
-    }
-
-	$.get(tokensSearchUrl, function(data) {
-		let formattedResult = '';
-		let items = data.items;
-
-        if (items.length == 0) {
-            formattedResult = '<tr><td colspan="5">No results matching your query.</td></tr>';
-        } else if (items.length === 1) {
-            location.href = getTokenUrl(items[0].id);
-        } else {
-    		for (let i = 0; i < items.length; i++) {
-                let tokenData = processNftData(items[i]);
-
-        		formattedResult += '<tr>';
-
-                //Id
-        		formattedResult += '<td><span class="d-lg-none"><strong>Id: </strong></span><a href="' + getTokenUrl(tokenData.data.id) + '">' + formatAddressString(tokenData.data.id) + '</a></td>';
-
-                //Name
-                if (tokenData.data.name == null || tokenData.data.name == '') {
-                    tokenData.data.name = '';
-                }
-
-        		formattedResult += '<td style="word-break:break-all;"><span class="d-lg-none"><strong>Name: </strong></span>' + tokenData.data.name + '</td>';
-
-                //Type
-                let type = '<span class="text-info">Token</span>';
-
-                if (networkType == 'testnet') {
-                    type = '<span class="text-light" id="tokenType-' + tokenData.data.id + '">Unknown</span>';
-
-                    getNftInfo(tokenData.data.id, onGotNftInfo);
-                }
-
-                if (tokenData.type != undefined) {
-                    type = tokenTypeSwitch(tokenData.type);
-                }
-
-                if (tokenData.data.isBurned == 't') {
-                    type = '<span class="text-danger">Burned</span>';
-                }
-
-                formattedResult += '<td><span class="d-lg-none"><strong>Type: </strong></span>' + type + '</td>';
-
-                //Emission amount
-        		formattedResult += '<td><span class="d-lg-none"><strong>Amount: </strong></span>' + formatValue(getAssetValue(tokenData.data.emissionAmount, tokenData.data.decimals)) + '</td>';
-
-                //Description
-                let asciiArt = isAsciiArt(tokenData.data.description);
-
-        		formattedResult += '<td><span class="d-lg-none"><strong>Description: </strong></span><pre class="tokenDescriptionPre' + (asciiArt ? ' pre-ascii' : '') + '" style="max-height:100px;overflow-y:auto;">' + formatNftDescription(tokenData.data.description) + '</pre></td>';
-
-                formattedResult += `<td id="${tokenData.data.transactionId}"></td>`;
-
-                $.get(`${API_HOST}transactions/${tokenData.data.transactionId}`, function(tdata) {
-                    const date = new Date(tdata.timestamp);
-
-                    const day = String(date.getDate()).padStart(2, '0');
-                    const month = String(date.getMonth() + 1).padStart(2, '0');
-                    const year = date.getFullYear();
-
-                    const formattedDate = `${day}/${month}/${year}`;
-
-                    $('#' + tokenData.data.transactionId).html(formattedDate);
-                });
-
-    			formattedResult += '</tr>';	
-    		}
-
-            setupPagination(data.total);
-        }
-
-		$('#issuedTokensTableBody').html(formattedResult);
-
-        $('#issuedTokensHolder').show();
-    })
-    .fail(function(data) {
-        showLoadError('Failed to fetch issued tokens.');
-    })
-    .always(function() {        
-        $('#txLoading').hide();
-    });
+function escapeText(text) {
+	return String(text == null ? '' : text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function setupToggleBurnedTokens() {
-    hideBurned = params[BURNED_TOKEN_PATAM];
+async function startHeight() {
+	const data = await LiteNode.get('blockchain/indexedHeight');
 
-    if (hideBurned == undefined) {
-        hideBurned = 'false';
-        $('#toggleBurned').prop('checked', '');
-    } else {
-        hideBurned = 'true';
-        $('#toggleBurned').prop('checked', 'checked');
-    }
+	return Number(data.indexedHeight);
 }
 
-function onToggleBurnedTokens() {
-    let toggleBurned = $('#toggleBurned').prop('checked');
-    
-    if (toggleBurned == true) {
-        params[BURNED_TOKEN_PATAM] = 'true';
-    } else {  
-        delete(params[BURNED_TOKEN_PATAM]);
-    }
+// Header ids for heights from..to, newest first
+async function headerIds(from, to) {
+	const headers = await LiteNode.get('blocks/chainSlice?fromHeight=' + from + '&toHeight=' + to);
 
-    params['offset'] = 0;
-
-    window.location.assign(getCurrentUrlWithParams());
+	return (headers || [])
+		.filter(header => header.height >= from && header.height <= to)
+		.sort((a, b) => b.height - a.height);
 }
 
-function setupToggleUtilityTokens() {
-    hideUtility = params[UTILITY_TOKEN_PATAM];
+// Mints in the given blocks: { id, box, txId, height, timestamp }, newest first
+function findMints(blocks) {
+	const mints = [];
 
-    if (hideUtility == undefined) {
-        hideUtility = 'false';
-        $('#toggleUtility').prop('checked', '');
-    } else {
-        hideUtility = 'true';
-        $('#toggleUtility').prop('checked', 'checked');
-    }
+	blocks.sort((a, b) => b.header.height - a.header.height);
+
+	for (const block of blocks) {
+		const txs = (block.transactions || []).slice().reverse();
+
+		for (const tx of txs) {
+			const first = tx.inputs && tx.inputs[0];
+			if (!first) continue;
+
+			for (const output of tx.outputs || []) {
+				if ((output.assets || []).some(asset => asset.tokenId == first.boxId)) {
+					mints.push({ id: first.boxId, box: output, txId: tx.id, height: block.header.height, timestamp: block.header.timestamp });
+					break;
+				}
+			}
+		}
+	}
+
+	return mints;
 }
 
-function onToggleUtilityTokens() {
-    let toggleUtility = $('#toggleUtility').prop('checked');
-    
-    if (toggleUtility == true) {
-        params[UTILITY_TOKEN_PATAM] = 'true';
-    } else {  
-        delete(params[UTILITY_TOKEN_PATAM]);
-    }
+async function scanStep() {
+	if (nextHeight == null) {
+		nextHeight = await startHeight();
+		newestScanned = nextHeight;
+	}
 
-    params['offset'] = 0;
+	const to = nextHeight;
+	const from = Math.max(1, to - BLOCKS_PER_STEP + 1);
+	const headers = await headerIds(from, to);
+	const ids = headers.map(header => header.id);
+	const batches = [];
 
-    window.location.assign(getCurrentUrlWithParams());
+	for (let i = 0; i < ids.length; i += BLOCK_BATCH) {
+		batches.push(LiteNode.post('blockchain/block/byHeaderIds', ids.slice(i, i + BLOCK_BATCH)));
+	}
+
+	const mints = findMints((await Promise.all(batches)).flatMap(blocks => blocks || []));
+
+	nextHeight = from - 1;
+	oldestScanned = from;
+
+	return mints;
 }
 
-function setupTypeSelect() {
-    tokenType = params[TOKEN_TYPE_PARAM];
+async function describeMints(mints) {
+	const meta = await LiteNode.tokens(mints.map(mint => mint.id));
 
-    if (tokenType == undefined) {
-        tokenType = 'all';
-    }
+	return mints.map(function(mint) {
+		const m = meta.get(mint.id) || {};
+		const token = {
+			id: mint.id,
+			name: m.name || '',
+			description: m.description || '',
+			decimals: m.decimals || 0,
+			emissionAmount: m.emissionAmount != null ? m.emissionAmount : String(mint.box.assets.find(asset => asset.tokenId == mint.id).amount),
+			additionalRegisters: LiteNode.explorerRegisters(mint.box.additionalRegisters)
+		};
+		const nft = processNftData(token);
 
-    $('#tokenType').val(tokenType);
+		return { mint: mint, token: token, type: nft ? nft.type : undefined };
+	});
 }
 
-function onTokenTypeChanged() {
-    if (setup) {
-        return;
-    }
+function formatMintDate(timestamp) {
+	const date = new Date(Number(timestamp));
 
-    tokenType = $('#tokenType').val();
-
-    params[TOKEN_TYPE_PARAM] = tokenType;
-    params['offset'] = 0;
-
-    window.location.assign(getCurrentUrlWithParams());
+	return String(date.getDate()).padStart(2, '0') + '/' + String(date.getMonth() + 1).padStart(2, '0') + '/' + date.getFullYear()
+		+ ' ' + String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
 }
 
-function setupOrderSelect() {
-    orderBy = params[ORDER_BY_PARAM];
+function tokenRowHtml(item) {
+	const token = item.token;
+	const asciiArt = isAsciiArt(token.description);
+	let html = '<tr>';
 
-    if (orderBy == undefined) {
-        orderBy = false;
-    }
+	html += '<td><span class="d-lg-none"><strong>Id: </strong></span><a href="' + getTokenUrl(token.id) + '">' + formatAddressString(token.id) + '</a></td>';
+	html += '<td style="word-break:break-all;"><span class="d-lg-none"><strong>Name: </strong></span>' + (token.name ? escapeText(token.name) : '<span class="text-light">No name</span>') + '</td>';
+	html += '<td><span class="d-lg-none"><strong>Type: </strong></span>' + tokenTypeSwitch(item.type) + '</td>';
+	html += '<td><span class="d-lg-none"><strong>Amount: </strong></span>' + formatValue(getAssetValue(String(token.emissionAmount), token.decimals)) + '</td>';
+	html += '<td' + (token.description ? '' : ' class="d-none d-lg-table-cell"') + '><span class="d-lg-none"><strong>Description: </strong></span><pre class="tokenDescriptionPre' + (asciiArt ? ' pre-ascii' : '') + '" style="max-height:100px;overflow-y:auto;">' + (formatNftDescription(escapeText(token.description)) || '') + '</pre></td>';
+	html += '<td><span class="d-lg-none"><strong>Minted: </strong></span><a href="' + getBlockUrl(item.mint.height) + '">' + formatMintDate(item.mint.timestamp) + '</a></td>';
+	html += '</tr>';
 
-    if (orderBy == false) {
-        $('#orderBy').val('recent');        
-    } else {
-        $('#orderBy').val(orderBy);
-    }
+	return html;
 }
 
-function onOrderChanged() {
-    if (setup) {
-        return;
-    }
+async function loadMoreTokens() {
+	if (scanning) return;
 
-    orderBy = $('#orderBy').val();
+	scanning = true;
+	$('#loadMoreTokens').prop('disabled', true);
+	$('#issuedTokensLoading').show();
 
-    params[ORDER_BY_PARAM] = orderBy;
-    params['offset'] = 0;
+	try {
+		const items = await describeMints(await scanStep());
 
-    window.location.assign(getCurrentUrlWithParams());
-}
+		$('#issuedTokensTableBody').append(items.map(tokenRowHtml).join(''));
+		shownTokens += items.length;
 
-function onGotNftInfo(nftInfo) {
-    let typeString = tokenTypeSwitch(nftInfo.type);
+		$('#issuedTokensEmpty').toggle(shownTokens === 0);
+		$('#issuedTokensTable').toggle(shownTokens > 0);
+		$('#issuedTokensRange').text('Blocks ' + nFormatter(newestScanned, 0, true, true) + ' to ' + nFormatter(oldestScanned, 0, true, true) + '.');
+		$('#loadMoreTokens').toggle(oldestScanned > 1);
+		$('#issuedTokensHolder').show();
+	} catch (e) {
+		console.warn('Token scan failed', e);
 
-    $('#tokenType-' + nftInfo.data.id).removeClass('text-light');
-    $('#tokenType-' + nftInfo.data.id).html(typeString);
+		if (shownTokens === 0) {
+			showLoadError('Couldn\'t load recent tokens. <a href="#" onclick="location.reload(); return false;">Try again</a>');
+		} else {
+			$('#issuedTokensRange').text('Couldn\'t load more. Try again.');
+		}
+	} finally {
+		scanning = false;
+		$('#loadMoreTokens').prop('disabled', false);
+		$('#issuedTokensLoading').hide();
+		$('#txLoading').hide();
+	}
 }
 
 function tokenTypeSwitch(type) {
-    switch (type) {
-        case NFT_TYPE.Image:
-        return '<span class="text-warning">NFT </span><img class="token-icon nft-icon" src="./images/nft-image.png"/>';
-        case NFT_TYPE.Audio:
-        return '<span class="text-warning">NFT </span><img class="token-icon nft-icon" src="./images/nft-audio.png"/>';
-        case NFT_TYPE.Video:
-        return '<span class="text-warning">NFT </span><img class="token-icon nft-icon" src="./images/nft-video.png"/>';
-        case NFT_TYPE.ArtCollection:
-        return '<span class="text-warning">NFT </span><img class="token-icon nft-icon" src="./images/nft-artcollection.png"/>';
-        case NFT_TYPE.FileAttachment:
-        return '<span class="text-warning">NFT </span><img class="token-icon nft-icon" src="./images/nft-file.png"/>';
-        case NFT_TYPE.MembershipToken:
-        return '<span class="text-warning">NFT </span><img class="token-icon nft-icon" src="./images/nft-membership.png"/>';
-        default:
-        return '<span class="text-info">Token</span>';
-    }
+	switch (type) {
+		case NFT_TYPE.Image:
+			return '<span class="text-warning">NFT </span><img class="token-icon nft-icon" src="./images/nft-image.png"/>';
+		case NFT_TYPE.Audio:
+			return '<span class="text-warning">NFT </span><img class="token-icon nft-icon" src="./images/nft-audio.png"/>';
+		case NFT_TYPE.Video:
+			return '<span class="text-warning">NFT </span><img class="token-icon nft-icon" src="./images/nft-video.png"/>';
+		case NFT_TYPE.ArtCollection:
+			return '<span class="text-warning">NFT </span><img class="token-icon nft-icon" src="./images/nft-artcollection.png"/>';
+		case NFT_TYPE.FileAttachment:
+			return '<span class="text-warning">NFT </span><img class="token-icon nft-icon" src="./images/nft-file.png"/>';
+		case NFT_TYPE.MembershipToken:
+			return '<span class="text-warning">NFT </span><img class="token-icon nft-icon" src="./images/nft-membership.png"/>';
+		default:
+			return '<span class="text-info">Token</span>';
+	}
 }

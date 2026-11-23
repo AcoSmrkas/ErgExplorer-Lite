@@ -1,254 +1,79 @@
-import { TokenState } from './state.js';
+import { TokenState } from './state.js?v=2';
+
+// The node's proxy may refuse pages larger than 100
+const PAGE = 100;
+// Holders are counted from unspent boxes: up to this many pages from the oldest end, then as many
+// from the newest end, where busy contract boxes (pools, banks) sit. A few pages at a time
+const HOLDER_PAGES_EACH_END = 10;
+const HOLDER_PARALLEL = 4;
+export const BOX_PAGE = 20;
+
+// Unspent byTokenId answers a plain array on some nodes and { items, total } on others
+function listOf(data) {
+	return Array.isArray(data) ? data : ((data && data.items) || []);
+}
+
+// Some nodes repeat a box within a page, so callers dedupe by box id
+function unspentPage(page, direction) {
+	return LiteNode.get('blockchain/box/unspent/byTokenId/' + TokenState.tokenId + '?offset=' + (page * PAGE) + '&limit=' + PAGE + '&sortDirection=' + direction)
+		.then(listOf);
+}
 
 export const TokenApiClient = {
-	// Fetch supply info from Crux Finance
-	async getCruxData() {
-		return new Promise((resolve) => {
-			// Crux is currently unreachable; without a timeout a hung XHR stalls
-			// the getPrices() call chained below for the browser's full timeout.
-			$.ajax({
-				url: 'https://api.cruxfinance.io/crux/token_info/' + TokenState.tokenId,
-				type: 'GET',
-				dataType: 'json',
-				timeout: 8000,
-				success: function (data) {
-					TokenState.amountsData = data;
-					resolve(data);
-				}
-			}).fail(function(error) {
-				console.error('Error fetching Crux data:', error);
-				resolve(null);
-			}).always(function() {
-				// Call getPrices from prices.js if available
-				if (typeof getPrices === 'function') {
-					getPrices(() => {
-						// Price data loaded, trigger chart display if we have price history
-						console.log('Prices loaded, checking for price history data');
+	// Unspent boxes holding the token. complete is false when there were more than were counted
+	async getUnspentBoxes() {
+		const seen = new Map();
+		const add = list => {
+			for (const box of list) seen.set(box.boxId, box);
+		};
 
-						// Refresh UI components that depend on prices
-						import('./ui-display.js?v=3').then(module => {
-							if (TokenState.amountsData) module.TokenUIDisplay.printSupplyInfo();
-							if (TokenState.holders && TokenState.holders.length > 0) module.TokenUIDisplay.printHolders(TokenState.holders);
-							if (TokenState.txs && TokenState.txs.length > 0) module.TokenUIDisplay.printTxs(TokenState.txs);
-							if (TokenState.swaps && TokenState.swaps.length > 0) module.TokenUIDisplay.printSwaps(TokenState.swaps);
-						});
+		const first = await unspentPage(0, 'asc');
+		add(first);
 
-						// Import and call chart display if price history is loaded
-						import('./ui-controllers.js?v=2').then(module => {
-							module.TokenUIControllers.setLinks();
+		if (first.length < PAGE) {
+			return { boxes: Array.from(seen.values()), complete: true };
+		}
 
-							if (TokenState.priceData && TokenState.priceData.length > 0) {
-								console.log('Price history available, displaying chart');
-								module.TokenUIControllers.printGainersLosers(0);
-							}
-						});
-					}, true);
-				}
-			});
-		});
-	},
+		const walk = async (startPage, direction) => {
+			for (let page = startPage; page < HOLDER_PAGES_EACH_END; page += HOLDER_PARALLEL) {
+				const count = Math.min(HOLDER_PARALLEL, HOLDER_PAGES_EACH_END - page);
+				const pages = await Promise.all(Array.from({ length: count }, (_, i) => unspentPage(page + i, direction)));
+				let short = false;
 
-	// Fetch transactions for token
-	async getTxsData() {
-		return new Promise((resolve) => {
-			if (!TokenState.tokenId) {
-				console.warn('Token ID not set for transactions');
-				resolve([]);
-				return;
-			}
-
-			const url = 'https://api.ergexplorer.com/tokens/getTransactions?offset=0&limit=10&tokenId=' + encodeURIComponent(TokenState.tokenId);
-			console.log('Fetching TXs from:', url);
-
-			$.get(url, function (data) {
-				const items = (data && data.items) ? data.items : [];
-				TokenState.txs = items;
-				resolve(items);
-			}).fail(function (error) {
-				console.error('Error fetching transactions:', error);
-				resolve([]); // Resolve with empty instead of rejecting
-			});
-		});
-	},
-
-	// Fetch swaps for token
-	async getSwapsData() {
-		return new Promise((resolve) => {
-			if (!TokenState.tokenId) {
-				console.warn('Token ID not set for swaps');
-				resolve([]);
-				return;
-			}
-
-			if (TokenState.isLpToken) {
-				resolve([]);
-				return;
-			}
-
-			const url = 'https://api.mewfinance.com/dex/getSwapsByTokenId?tokenId=' + encodeURIComponent(TokenState.tokenId);
-			console.log('Fetching swaps from:', url);
-
-			$.get(url, function (data) {
-				const items = (data && data.items) ? data.items : [];
-				TokenState.swaps = items;
-				resolve(items);
-			}).fail(function (error) {
-				console.error('Error fetching swaps:', error);
-				resolve([]); // Resolve with empty instead of rejecting
-			});
-		});
-	},
-
-	// Get price history for chart
-	async getPriceHistory() {
-		return new Promise((resolve) => {
-			if (!TokenState.tokenData || !TokenState.tokenData.name) {
-				console.warn('Token data not loaded yet');
-				resolve();
-				return;
-			}
-
-			$.post('https://api2.ergexplorer.com/tokens/getPriceHistoryNew',
-				{ from: TokenState.from30d, ids: [TokenState.tokenData.name] },
-				function(data) {
-					if (data && data.length > 0 && data[0].length > 0) {
-						TokenState.priceData = data;
-						TokenState.hasPrice = true;
-					} else {
-						TokenState.hasPrice = false;
-					}
-					$('#priceLoading').hide();
-					resolve(data);
-				}
-			).fail(function(error) {
-				console.error('Error fetching price history:', error);
-				TokenState.hasPrice = false;
-				$('#priceLoading').hide();
-				resolve(null);
-			});
-		});
-	},
-
-	// Get holders from ergo.watch
-	async getHolders() {
-		return new Promise((resolve, reject) => {
-			const tokenId = TokenState.tokenId;
-			if (!tokenId) {
-				resolve([]);
-				return;
-			}
-
-			let timeout = setTimeout(() => {
-				console.log('Holders timeout, trying fallback');
-				this.getHoldersFallback().then(resolve).catch(reject);
-			}, 2000);
-
-			$.ajax({
-				url: 'https://api.ergo.watch/lists/addresses/by/balance?token_id=' + tokenId + '&limit=10',
-				success: function (data) {
-					if (timeout) {
-						clearTimeout(timeout);
-					}
-					const items = data || [];
-					TokenState.holders = items;
-					resolve(items);
-				},
-				error: function (xhr, status, error) {
-					if (timeout) {
-						clearTimeout(timeout);
-					}
-					console.error('Error fetching holders:', status, error);
-					this.getHoldersFallback().then(resolve).catch(reject);
-				}.bind(this)
-			});
-		});
-	},
-
-	// Get holder count from ergo.watch
-	async getHolderCount() {
-		return new Promise((resolve, reject) => {
-			const tokenId = TokenState.tokenId;
-			if (!tokenId) {
-				resolve(0);
-				return;
-			}
-
-			let timeout = setTimeout(() => {
-				console.log('Holder count timeout, trying fallback');
-				this.getHolderCountFallback().then(resolve).catch(reject);
-			}, 2000);
-
-			$.ajax({
-				url: 'https://api.ergo.watch/p2pk/count?token_id=' + tokenId,
-				success: function (data) {
-					if (timeout) {
-						clearTimeout(timeout);
-					}
-					resolve(data);
-				},
-				error: function (xhr, status, error) {
-					if (timeout) {
-						clearTimeout(timeout);
-					}
-					console.error('Error fetching holder count:', status, error);
-					this.getHolderCountFallback().then(resolve).catch(reject);
-				}.bind(this)
-			});
-		});
-	},
-
-	// Fallback for holders data
-	async getHoldersFallback() {
-		return new Promise((resolve) => {
-			const apiHost = typeof ERGEXPLORER_API_HOST !== 'undefined' ? ERGEXPLORER_API_HOST : 'https://api.ergexplorer.com/';
-			$.get(apiHost + 'tokens/getHolders?id=' + TokenState.tokenId, function (data) {
-				const items = data && data.items ? data.items : [];
-				TokenState.holders = items;
-				resolve(items);
-			}).fail(function (error) {
-				console.error('Error fetching holders (fallback):', error);
-				resolve([]);
-			});
-		});
-	},
-
-	// Fallback for holder count
-	async getHolderCountFallback() {
-		return new Promise((resolve) => {
-			const apiHost = typeof ERGEXPLORER_API_HOST !== 'undefined' ? ERGEXPLORER_API_HOST : 'https://api.ergexplorer.com/';
-			$.get(apiHost + 'tokens/getHolderCount?id=' + TokenState.tokenId, function (data) {
-				resolve(data);
-			}).fail(function (error) {
-				console.error('Error fetching holder count (fallback):', error);
-				resolve(null);
-			});
-		});
-	},
-
-	// Check addressbook for token addresses
-	checkAddressbook() {
-		const apiHost = typeof ERGEXPLORER_API_HOST !== 'undefined' ? ERGEXPLORER_API_HOST : 'https://api.ergexplorer.com/';
-		$.get(apiHost + 'addressbook/getTokenAddresses?tokenId=' + TokenState.tokenId, function (data) {
-			if (data && data.total > 0) {
-				let formattedData = '';
-
-				for (let i = 0; i < data.items.length; i++) {
-					let addressData = data.items[i];
-					if (typeof TokenUIDisplay !== 'undefined' && typeof TokenUIDisplay.printAddressbookAddress === 'function') {
-						formattedData += TokenUIDisplay.printAddressbookAddress(addressData, i == 0, i == data.items.length - 1);
-					}
+				for (const list of pages) {
+					add(list);
+					if (list.length < PAGE) short = true;
 				}
 
-				$('#addressbookInfoHolder').html(formattedData);
-				$('#addressbookInfo').show();
-
-				if (data.items[0].url != '') {
-					$('#addressbookUrl').html('<strong class="">URL:</strong> <a target="_new" href="' + data.items[0].url + '">' + data.items[0].url + '</a>');
-					$('#addressbookUrl').show();
-				}
+				if (short) return true;
 			}
-		}).fail(function(error) {
-			console.error('Error checking addressbook:', error);
-		});
+
+			return false;
+		};
+
+		// The oldest pages reach the end: every box is counted
+		if (await walk(1, 'asc')) {
+			return { boxes: Array.from(seen.values()), complete: true };
+		}
+
+		await walk(0, 'desc');
+
+		return { boxes: Array.from(seen.values()), complete: false };
+	},
+
+	// Every box that ever held the token, newest first. Answers { items, total }
+	async getBoxes(offset) {
+		const data = await LiteNode.get('blockchain/box/byTokenId/' + TokenState.tokenId + '?offset=' + offset + '&limit=' + BOX_PAGE);
+
+		return { items: listOf(data), total: data && data.total != null ? Number(data.total) : null };
+	},
+
+	// The box the minting tx spent first: a new token takes its id, and EIP-24 keeps traits in its R6
+	async getIssuerBox() {
+		try {
+			return await LiteNode.get('blockchain/box/byId/' + TokenState.tokenId);
+		} catch (e) {
+			return null;
+		}
 	}
 };

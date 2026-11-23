@@ -1,43 +1,27 @@
-// Central state management for token page
+// Central state for the token page. Everything here comes from the selected node.
 export const TokenState = {
-	// Token data
-	tokenData: undefined,
 	tokenId: '',
+	tokenData: undefined,
 	nftType: undefined,
 	decimals: 0,
 	isLpToken: false,
 
-	// Price/market data
-	priceData: undefined,
-	hasPrice: false,
-	amountsData: undefined,
+	// Unspent boxes that hold the token, grouped by address
 	holders: [],
 	holderCount: 0,
-	txs: [],
-	swaps: [],
+	countedBoxes: 0,
+	holdersComplete: false,
+	holdersLoaded: false,
+	supplyInBoxes: null,
 
-	// Chart state
-	chart: undefined,
-	chartType: undefined,
-	tempDate: -1,
-	tempDateIndex: 0,
-	chartUsd: true,
+	// The token's boxes, newest first
+	boxes: [],
+	boxesTotal: 0,
 
-	// NFT/display data
+	// From prices.js tokenPriceList, once loaded
+	market: null,
+	pricesLoaded: false,
+
 	imageUrl: null,
-	currentAddress: '',
-
-	// Time periods for price history
-	nowTime: Date.now(),
-	from24h: Date.now() - (24 * 60 * 60 * 1000),
-	from7d: Date.now() - (7 * 24 * 60 * 60 * 1000),
-	from30d: Date.now() - (30 * 24 * 60 * 60 * 1000),
-
-	// Helper to reset dates (call periodically)
-	updateTimePeriods() {
-		this.nowTime = Date.now();
-		this.from24h = this.nowTime - (24 * 60 * 60 * 1000);
-		this.from7d = this.nowTime - (7 * 24 * 60 * 60 * 1000);
-		this.from30d = this.nowTime - (30 * 24 * 60 * 60 * 1000);
-	}
+	currentAddress: ''
 };
