@@ -1,128 +1,49 @@
 import { AddressState } from './state.js';
 
-// How long a source gets before the next one is asked too. Warm, both explorers answer in
-// 0.1-1 s; cold, a busy address took sigmaspace 2-20 s and api.ergoplatform 1-9 s.
-const HEDGE_AFTER_MS = 1500;
-// Per tx-list source. A cold sigmaspace answered a 376k-tx address in 20.6 s and 29.9 s while
-// api.ergoplatform 503'd after 30 s, so a shorter cap turns slow into "no transactions".
-const TX_FETCH_TIMEOUT_MS = 45000;
-// Other address data fetches (mempool, balance, unspent boxes) abort after this to avoid hanging.
-const DATA_FETCH_TIMEOUT_MS = 15000;
-// api.ergoplatform's mempool-by-address took 6.8 s and 11.8 s on cold addresses (2026-10-28)
-// while our node's answered in 0.65 s. See fetchMempool.
-const MEMPOOL_EXTRA_WAIT_MS = 1500;
-// Indexed nodes behind our gateway: same /blockchain/balance as the explorer's balance/total
-// (ERG, token ids, amounts and decimals matched on a 2,236-token address), and often faster when
-// that is cold. Not node.sigmaspace.io directly: its index kept 193 spent boxes of one tx
-// (height 1883676) as unspent, +1,419.7 ERG on 88dhgz…DBY. The gateway answers a balance only
-// when two indexed nodes agree.
-const INDEXED_NODE_HOST = 'https://chain.mewfinance.com/';
+// Everything on the address page comes from the node the visitor picked (LiteNode, common/node.js).
 
-/**
- * Fetch with an abort-based timeout that also covers reading the response body, so a host
- * that hangs (no response, or headers-then-stall) rejects instead of waiting forever.
- */
-async function fetchWithTimeout(url, timeoutMs, readBody, init) {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
+// The node lists unspent boxes 100 at a time and gives no count, so the page reads them all,
+// oldest first, up to this many: that gives the count, the storage rent notice and the box pages.
+// Past it, box pages are read from the node one at a time and the count shows as "1,000+".
+const UNSPENT_PAGE = 100;
+const UNSPENT_SCAN_MAX = 1000;
+// The 60 s refresh reads the box list again at most this often
+const UNSPENT_RESCAN_MS = 60000;
+// The node's mempool view by address answers at most this many
+const MEMPOOL_LIMIT = 100;
+// Spectrum pool boxes, for LP token values; the pool list changes slowly
+const POOLS_CACHE_MS = 5 * 60 * 1000;
+// Spectrum mints its LP tokens with a supply of Long.MaxValue and keeps the rest in the pool box
+const SPECTRUM_LP_EMISSION = 9223372036854775807n;
 
+// A mempool tx carries no time: the page shows when it first saw it
+const firstSeen = new Map();
+
+function toBigInt(value) {
 	try {
-		const response = await fetch(url, Object.assign({}, init, { signal: controller.signal }));
-		return await readBody(response);
-	} finally {
-		clearTimeout(timer);
+		return value === undefined || value === null ? 0n : BigInt(String(value));
+	} catch (e) {
+		return 0n;
 	}
 }
 
-/**
- * Ask the sources in order, the next one also when nothing has answered after HEDGE_AFTER_MS
- * or as soon as every source asked so far has failed. The first good answer wins and the others
- * are aborted. A slow source is not cancelled to make room for the next: it may still be first.
- * Each source is { url, init, read }; `read` returns the data or throws on a bad answer.
- */
-function fetchFirst(sources, timeoutMs) {
-	return new Promise((resolve, reject) => {
-		const controllers = [];
-		let started = 0;
-		let failed = 0;
-		let done = false;
-		let hedgeTimer;
+// LiteNode.addressUnspent puts token names on every box; the scan only needs heights, values and sizes
+async function readUnspent(address, boxOffset, limit, options = {}) {
+	const list = await LiteNode.get('blockchain/box/unspent/byAddress/' + address
+		+ '?offset=' + boxOffset + '&limit=' + limit + '&sortDirection=' + (options.newestFirst ? 'desc' : 'asc'));
 
-		const finish = () => {
-			done = true;
-			clearTimeout(hedgeTimer);
-			controllers.forEach(controller => controller.abort());
-		};
-
-		const startNext = () => {
-			if (done || started >= sources.length) return;
-
-			const source = sources[started++];
-			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), timeoutMs);
-			controllers.push(controller);
-
-			clearTimeout(hedgeTimer);
-			hedgeTimer = setTimeout(startNext, HEDGE_AFTER_MS);
-
-			fetch(source.url, Object.assign({}, source.init, { signal: controller.signal }))
-				.then(source.read)
-				.then(data => {
-					if (done) return;
-					finish();
-					resolve(data);
-				}, error => {
-					if (done) return;
-					console.warn('Address data source failed: ' + source.url, error);
-					if (++failed === sources.length) {
-						finish();
-						reject(error);
-					} else {
-						startNext();
-					}
-				})
-				.finally(() => clearTimeout(timer));
-		};
-
-		startNext();
-	});
+	return Array.isArray(list) ? list : [];
 }
 
-async function readItemsBigJson(response) {
-	if (!response.ok) throw new Error('HTTP ' + response.status);
-	const buffer = new TextDecoder('utf-8').decode(await response.arrayBuffer());
-	const data = JSONbig.parse(buffer);
-	// sigmaspace can answer HTTP 200 with an error body
-	if (!data || !Array.isArray(data.items)) throw new Error('No items in answer');
-	return data;
-}
+async function readPoolBoxes(address) {
+	const boxes = [];
 
-async function readBalance(response) {
-	if (!response.ok) throw new Error('HTTP ' + response.status);
-	const data = await response.json();
-	if (!data || !data.confirmed || !Array.isArray(data.confirmed.tokens)) throw new Error('No balance in answer');
-	return data;
-}
+	for (let page = 0; ; page += UNSPENT_PAGE) {
+		const list = await LiteNode.get('blockchain/box/unspent/byAddress/' + address + '?offset=' + page + '&limit=' + UNSPENT_PAGE);
+		boxes.push(...(list || []));
 
-/**
- * API client for address page data fetching
- * Wraps jQuery $.get/$.ajax and fetch calls for cleaner API
- */
-/**
- * Put each box's real address on it. The explorer API files ErgoTrees it cannot parse
- * (ErgoTree v3, e.g. Lithos orders and pools) under the burn address 4MQyMKvMbnCJG3aJ,
- * so without this they would match that address's book entry and lose their template label.
- */
-function withRealAddresses(data) {
-	if (data && Array.isArray(data.items)) {
-		for (const tx of data.items) {
-			for (const box of [...(tx.inputs || []), ...(tx.outputs || [])]) {
-				box.address = getBoxAddress(box);
-			}
-		}
+		if (!list || list.length < UNSPENT_PAGE) return boxes;
 	}
-
-	return data;
 }
 
 export const ApiClient = {
@@ -131,15 +52,12 @@ export const ApiClient = {
 	_prefetched: new Map(),
 
 	/**
-	 * Start the first load's chain requests now. They need none of the scam list, token icons
-	 * or prices, only the rendering does, and used to wait 1.2-1.6 s behind those.
+	 * Start the first load's chain requests now. Prices and token icons are only needed to render.
 	 */
 	prefetch({ mempool }) {
 		const requests = [
 			['summary', this._fetchAddressSummary()],
-			['transactions', this._fetchTransactionsData()],
-			[this._unspentBoxesKey(AddressState.unspentBoxesOffset, AddressState.unspentBoxesPageSize),
-				this._fetchUnspentBoxes(AddressState.unspentBoxesOffset, AddressState.unspentBoxesPageSize)]
+			['transactions', this._fetchTransactionsData()]
 		];
 		if (mempool) {
 			requests.push(['mempool', this._fetchMempoolData()]);
@@ -150,6 +68,8 @@ export const ApiClient = {
 			promise.catch(() => {});
 			this._prefetched.set(key, promise);
 		});
+
+		this.scanUnspentBoxes().catch(() => {});
 	},
 
 	_takePrefetched(key) {
@@ -159,147 +79,28 @@ export const ApiClient = {
 	},
 
 	/**
-	 * Fetch scam token list
-	 */
-	getScamList() {
-		return new Promise((resolve, reject) => {
-			$.get(ERGEXPLORER_API_HOST + 'tokens/getScam',
-				(data) => resolve(data.items.map(t => t.tokenId))
-			).fail(() => reject(new Error('Failed to fetch scam list')));
-		});
-	},
-
-	/**
-	 * Fetch verified address book details for the current address
-	 */
-	getAddressInfo() {
-		return new Promise((resolve, reject) => {
-			$.get(ERGEXPLORER_API_HOST + 'addressbook/getAddressInfo?address=' + AddressState.walletAddress,
-				(data) => resolve(data)
-			).fail(() => reject(new Error('Failed to fetch address details')));
-		});
-	},
-
-	/**
-	 * Get balance/summary URL
-	 */
-	getTxsUrl() {
-		let url = API_HOST_2 + 'addresses/' + AddressState.walletAddress + '/balance/total';
-		if (networkType === 'testnet') {
-			url = API_HOST + 'api/v1/addresses/' + AddressState.walletAddress + '/balance/total';
-		}
-		return url;
-	},
-
-	/**
-	 * Unspent boxes page URLs, in the order they are asked (see fetchFirst). sigmaspace lists
-	 * newest first; api.ergoplatform orders by its own globalIndex, which put boxes from height
-	 * 886k ahead of 1.904M on one address (2026-10-28), and took 25-28 s cold where sigmaspace
-	 * took 0.7-1.2 s.
-	 */
-	getUnspentBoxesDataUrls(boxOffset = 0, limit = AddressState.unspentBoxesPageSize) {
-		const query = '?offset=' + boxOffset + '&limit=' + limit;
-
-		if (networkType === 'testnet') {
-			return [API_HOST + 'api/v1/boxes/unspent/byAddress/' + AddressState.walletAddress + query];
-		}
-
-		return [
-			'https://api.sigmaspace.io/api/v1/boxes/unspent/byAddress/' + AddressState.walletAddress + query,
-			API_HOST_2 + 'boxes/unspent/byAddress/' + AddressState.walletAddress + query
-		];
-	},
-
-	/**
-	 * Transactions page URLs, in the order they are asked (see fetchFirst)
-	 */
-	getTxsDataUrls() {
-		const query = '/transactions?offset=' + offset + '&limit=' + ITEMS_PER_PAGE;
-
-		if (networkType === 'testnet') {
-			return [API_HOST + 'api/v1/addresses/' + AddressState.walletAddress + query];
-		}
-
-		return [
-			'https://api.sigmaspace.io/api/v1/addresses/' + AddressState.walletAddress + query,
-			API_HOST_2 + 'addresses/' + AddressState.walletAddress + query
-		];
-	},
-
-	/**
-	 * Get mempool URL
-	 */
-	getMempoolUrl() {
-		let url = API_HOST_2 + 'mempool/transactions/byAddress/' + AddressState.walletAddress;
-		if (networkType === 'testnet') {
-			url = API_HOST_2 + 'api/v1/mempool/transactions/byAddress/' + AddressState.walletAddress;
-		}
-		return url;
-	},
-
-	/**
-	 * Our node's pending txs for this address (see mergeMempoolItems in main.js)
-	 */
-	getOwnMempoolUrl() {
-		if (!MEMPOOL_API_HOST) return null;
-		return MEMPOOL_API_HOST + 'transactions/byAddress/' + AddressState.walletAddress;
-	},
-
-	/**
-	 * Fetch pending txs from every mempool source and merge them.
-	 * Rejects only if all sources fail.
+	 * The node's pending txs for this address, newest first.
+	 * ids/ownIds/complete are what pending-tracker.js reads.
 	 */
 	async fetchMempool() {
-		const ownUrl = this.getOwnMempoolUrl();
-		const urls = [ownUrl, this.getMempoolUrl()].filter(Boolean);
+		const items = await LiteNode.addressMempool(AddressState.walletAddress);
+		const now = Date.now();
 
-		const requests = urls.map(url =>
-			fetchWithTimeout(url, DATA_FETCH_TIMEOUT_MS, async (response) => {
-				if (!response.ok) throw new Error('Mempool fetch failed: ' + url);
-				const arrayBuffer = await response.arrayBuffer();
-				const buffer = new TextDecoder('utf-8').decode(arrayBuffer);
-				return JSONbig.parse(buffer);
-			})
-		);
-
-		// The transactions list waits for this. Once our node has answered, the explorer gets
-		// MEMPOOL_EXTRA_WAIT_MS more; a later answer is left to the 60s refresh. If our node
-		// failed, the explorer keeps its full timeout.
-		const ownAnswered = ownUrl ? requests[0].then(() => true, () => false) : null;
-		const bounded = requests.map((request, i) => {
-			if (!ownAnswered || i === 0) return request;
-			const cutOff = ownAnswered.then(ok => ok
-				? new Promise((resolve, reject) => setTimeout(() => reject(new Error('Mempool source too slow: ' + urls[i])), MEMPOOL_EXTRA_WAIT_MS))
-				: new Promise(() => {}));
-			return Promise.race([request, cutOff]);
-		});
-
-		const results = await Promise.allSettled(bounded);
-
-		const pages = results.map(result =>
-			result.status === 'fulfilled' && result.value && Array.isArray(result.value.items) ? result.value : null);
-		const answered = pages.filter(Boolean);
-
-		if (answered.length === 0) {
-			throw new Error('Mempool fetch failed');
+		for (const tx of items) {
+			if (!firstSeen.has(tx.id)) firstSeen.set(tx.id, now);
+			if (tx.creationTimestamp == null) tx.creationTimestamp = firstSeen.get(tx.id);
 		}
 
-		const data = mergeMempoolItems(answered.map(page => page.items));
+		const data = mergeMempoolItems([items]);
 
-		// For pending-tracker.js: every tx a source lists (the merge keeps one side of a double-spend),
-		data.ids = new Set(answered.flatMap(page => page.items.map(tx => tx.id)));
-		// what our node holds (null on testnet or when it failed to answer),
-		data.ownIds = ownUrl && pages[0] ? new Set(pages[0].items.map(tx => tx.id)) : null;
-		// and whether that is everything: a failed source, a paged list, or the explorer's
-		// `items: []` with `total > 0` would hide txs that are still pending.
-		data.complete = answered.length === urls.length && answered.every(page => page.items.length >= Number(page.total || 0));
+		data.ids = new Set(items.map(tx => tx.id));
+		// One node: it drops a tx from its pool as soon as the tx is in a block
+		data.ownIds = data.ids;
+		data.complete = items.length < MEMPOOL_LIMIT;
 
 		return data;
 	},
 
-	/**
-	 * Fetch mempool data
-	 */
 	async getMempoolData() {
 		return this._takePrefetched('mempool') || this._fetchMempoolData();
 	},
@@ -315,37 +116,27 @@ export const ApiClient = {
 			data = { items: [], total: 0 };
 		}
 
-		AddressState.mempoolData = withRealAddresses(data);
+		AddressState.mempoolData = data;
 
 		return data;
 	},
 
 	/**
-	 * A tx as an indexer has it once it is in a block, or null while no indexer knows it
-	 * (still pending, its block not indexed yet, or dropped).
+	 * A tx as the node's index has it once it is in a block, or null while it isn't there
+	 * (still pending, or dropped).
 	 */
 	async getConfirmedTransaction(txId) {
-		const urls = networkType === 'testnet'
-			? [API_HOST + 'api/v1/transactions/' + txId]
-			: [API_HOST_2 + 'transactions/' + txId, INDEXED_NODE_HOST + 'blockchain/transaction/byId/' + txId];
-
-		const results = await Promise.allSettled(urls.map(url =>
-			fetchWithTimeout(url, DATA_FETCH_TIMEOUT_MS, async (response) => {
-				return response.ok ? response.json() : null;
-			})
-		));
-
-		// The node's copy has only id, blockId and inclusionHeight in common with the explorer's,
-		// which is all the tracker reads. The id check guards against an error body with HTTP 200.
-		const found = results.find(result => result.status === 'fulfilled' && result.value &&
-			result.value.id === txId && result.value.blockId);
-
-		return found ? found.value : null;
+		try {
+			const tx = await LiteNode.get('blockchain/transaction/byId/' + txId);
+			return tx && tx.id === txId && tx.blockId ? tx : null;
+		} catch (error) {
+			if (error.kind !== 'notfound') console.warn('Tx lookup failed:', error);
+			return null;
+		}
 	},
 
 	/**
-	 * Fetch a page of the address's transactions: sigmaspace first, the explorer too if
-	 * sigmaspace is slow or fails (fetchFirst).
+	 * A page of the address's transactions, newest first
 	 */
 	async getTransactionsData() {
 		return this._takePrefetched('transactions') || this._fetchTransactionsData();
@@ -353,11 +144,8 @@ export const ApiClient = {
 
 	async _fetchTransactionsData() {
 		try {
-			const sources = this.getTxsDataUrls().map(url => ({ url, read: readItemsBigJson }));
-			const data = await fetchFirst(sources, TX_FETCH_TIMEOUT_MS);
-
-			AddressState.transactionsData = withRealAddresses(data);
-
+			const data = await LiteNode.addressTransactions(AddressState.walletAddress, Number(offset) || 0, ITEMS_PER_PAGE);
+			AddressState.transactionsData = data;
 			return data;
 		} catch (error) {
 			console.error('Transactions fetch failed:', error);
@@ -366,29 +154,15 @@ export const ApiClient = {
 	},
 
 	/**
-	 * Fetch balance summary: the explorer first, an indexed node too if the explorer is slow
-	 * or fails (fetchFirst). Both answer { confirmed: { nanoErgs, tokens }, unconfirmed }.
+	 * Balance: { confirmed: { nanoErgs, tokens }, unconfirmed }
 	 */
 	async getAddressSummary() {
 		return this._takePrefetched('summary') || this._fetchAddressSummary();
 	},
 
-	/**
-	 * After a watched tx confirms: the balance from whichever source has it differing from
-	 * `staleKey` (balanceKey of the balance shown before), or the stale one if none has it yet.
-	 * Every source is asked, since the first to answer can be the one whose index trails.
-	 */
-	async getChangedAddressSummary(staleKey) {
-		const results = await Promise.allSettled(this._addressSummarySources().map(source =>
-			fetchWithTimeout(source.url, DATA_FETCH_TIMEOUT_MS, source.read, source.init)
-		));
-		const answers = results.filter(result => result.status === 'fulfilled').map(result => result.value);
-
-		if (answers.length === 0) {
-			throw new Error('Balance fetch failed');
-		}
-
-		return answers.find(data => this.balanceKey(data) !== staleKey) || answers[0];
+	// One source, so a balance that hasn't changed yet is just read again (balance-summary.js retries)
+	async getChangedAddressSummary() {
+		return this._fetchAddressSummary();
 	},
 
 	/**
@@ -402,127 +176,151 @@ export const ApiClient = {
 		return [String(data.confirmed.nanoErgs)].concat(tokens).join(',');
 	},
 
-	_addressSummarySources() {
-		const sources = [{ url: this.getTxsUrl(), read: readBalance }];
-
-		if (networkType !== 'testnet') {
-			sources.push({
-				url: INDEXED_NODE_HOST + 'blockchain/balance',
-				// text/plain keeps it a simple request: no CORS preflight
-				init: { method: 'POST', body: AddressState.walletAddress, headers: { 'Content-Type': 'text/plain' } },
-				read: readBalance
-			});
-		}
-
-		return sources;
-	},
-
 	async _fetchAddressSummary() {
-		try {
-			return await fetchFirst(this._addressSummarySources(), DATA_FETCH_TIMEOUT_MS);
-		} catch (error) {
-			console.error('Balance fetch failed:', error);
-			throw error;
+		const data = await LiteNode.addressBalance(AddressState.walletAddress);
+
+		if (!data || !data.confirmed || !Array.isArray(data.confirmed.tokens)) {
+			throw new Error('No balance in answer');
 		}
+
+		return data;
+	},
+
+	_pools: null,
+	_poolsAt: 0,
+
+	/**
+	 * Spectrum N2T and T2T pool boxes by LP token id: { box, kind }
+	 */
+	async getSpectrumPools() {
+		if (networkType === 'testnet') return new Map();
+
+		if (!this._pools || Date.now() - this._poolsAt > POOLS_CACHE_MS) {
+			this._poolsAt = Date.now();
+			this._pools = Promise.all([readPoolBoxes(SPECTRUM_N2T_ADDRESS), readPoolBoxes(SPECTRUM_T2T_ADDRESS)])
+				.then(([n2t, t2t]) => {
+					const byLp = new Map();
+
+					for (const box of n2t) {
+						if (box.assets && box.assets.length >= 3) byLp.set(box.assets[1].tokenId, { box, kind: 'n2t' });
+					}
+					for (const box of t2t) {
+						if (box.assets && box.assets.length >= 4) byLp.set(box.assets[1].tokenId, { box, kind: 't2t' });
+					}
+
+					return byLp;
+				})
+				.catch(error => {
+					this._pools = null;
+					throw error;
+				});
+		}
+
+		return this._pools;
 	},
 
 	/**
-	 * Fetch cached LP pool values
+	 * USD value of `amount` LP tokens of a Spectrum pool, or null when it can't be valued.
+	 * The share is amount / (emission - LP left in the pool) of both reserves.
 	 */
-	async getLpPools(tokenIds) {
-		const ids = [...new Set((tokenIds || []).filter(Boolean))];
-		const batchSize = 40;
-		const batches = [];
+	spectrumLpValue(pool, amount) {
+		const reserveLp = toBigInt(pool.box.assets[1].amount);
+		const supply = SPECTRUM_LP_EMISSION - reserveLp;
+		const held = toBigInt(amount);
 
-		for (let i = 0; i < ids.length; i += batchSize) {
-			batches.push(ids.slice(i, i + batchSize));
+		if (supply <= 0n || held <= 0n || held > supply) return null;
+
+		const share = new BigNumber(held.toString()).dividedBy(supply.toString());
+		const sideUsd = asset => {
+			if (!asset) return null;
+			if (!prices[asset.tokenId]) return null;
+			return new BigNumber(String(asset.amount)).dividedBy(Math.pow(10, asset.decimals || 0)).times(prices[asset.tokenId]);
+		};
+
+		let poolUsd = null;
+
+		if (pool.kind === 'n2t') {
+			if (!(prices.ERG > 0)) return null;
+			// Both sides are worth the same at the pool's own price
+			poolUsd = new BigNumber(String(pool.box.value)).dividedBy(1e9).times(prices.ERG).times(2);
+		} else {
+			const x = sideUsd(pool.box.assets[2]);
+			const y = sideUsd(pool.box.assets[3]);
+			if (x && y) poolUsd = x.plus(y);
+			else if (x || y) poolUsd = (x || y).times(2);
 		}
 
-		const responses = await Promise.all(batches.map(async batch => {
-			const response = await fetch(ERGEXPLORER_API_HOST + 'tokens/getLpPools?ids=' + encodeURIComponent(batch.join(',')));
-			if (!response.ok) throw new Error('LP pools fetch failed');
-			return response.json();
-		}));
+		if (!poolUsd || !poolUsd.isFinite() || poolUsd.lte(0)) return null;
 
-		return responses.reduce((merged, response) => {
-			const items = response && response.items ? response.items : {};
-			merged.items = Object.assign(merged.items, items);
-			merged.total += Object.keys(items).length;
-			return merged;
-		}, { items: {}, total: 0 });
+		return { usdValue: share.times(poolUsd).toNumber(), poolUsdValue: poolUsd.toNumber() };
 	},
+
+	_unspentScan: null,
+	_unspentScanAt: 0,
+	_unspentComplete: null,
 
 	/**
-	 * Fetch unspent boxes
+	 * The address's unspent boxes, oldest first, up to UNSPENT_SCAN_MAX.
+	 * { boxes, complete } -- complete is false when there are more than that.
 	 */
-	async getUnspentBoxes(boxOffset = AddressState.unspentBoxesOffset, limit = AddressState.unspentBoxesPageSize) {
-		return this._takePrefetched(this._unspentBoxesKey(boxOffset, limit)) || this._fetchUnspentBoxes(boxOffset, limit);
-	},
+	scanUnspentBoxes(force = false) {
+		// A list too long to read whole isn't read again: its pages come from the node as they are shown
+		const stale = force && this._unspentComplete !== false && Date.now() - this._unspentScanAt > UNSPENT_RESCAN_MS;
 
-	_unspentBoxesKey(boxOffset, limit) {
-		return 'unspentBoxes:' + boxOffset + ':' + limit;
-	},
+		if (this._unspentScan && !stale) {
+			return this._unspentScan;
+		}
 
-	// Index into getUnspentBoxesDataUrls() of the source that answered last, asked first next time.
-	// The two list boxes in different orders, so pages from mixed sources would repeat or skip boxes.
-	_unspentBoxesSource: 0,
+		this._unspentScanAt = Date.now();
+		const scan = (async () => {
+			const boxes = [];
 
-	async _fetchUnspentBoxes(boxOffset, limit) {
-		try {
-			const urls = this.getUnspentBoxesDataUrls(boxOffset, limit);
-			const sources = urls.map((url, index) => ({
-				url,
-				read: async (response) => {
-					if (!response.ok) throw new Error('HTTP ' + response.status);
-					const data = await response.json();
-					// sigmaspace can answer HTTP 200 with an error body
-					if (!data || !Array.isArray(data.items)) throw new Error('No items in answer');
-					return { index, data };
+			for (let page = 0; page < UNSPENT_SCAN_MAX; page += UNSPENT_PAGE) {
+				const list = await readUnspent(AddressState.walletAddress, page, UNSPENT_PAGE);
+				boxes.push(...list);
+
+				if (list.length < UNSPENT_PAGE) {
+					this._unspentComplete = true;
+					return { boxes, complete: true };
 				}
-			}));
-			const preferred = Math.min(this._unspentBoxesSource, sources.length - 1);
-			sources.unshift(sources.splice(preferred, 1)[0]);
+			}
 
-			const answer = await fetchFirst(sources, DATA_FETCH_TIMEOUT_MS);
-			this._unspentBoxesSource = answer.index;
-			return answer.data;
-		} catch (error) {
-			console.error('Unspent boxes fetch failed:', error);
-			throw error;
+			this._unspentComplete = false;
+			return { boxes, complete: false };
+		})();
+
+		// A failed read isn't kept: the next call asks again
+		scan.catch(() => {
+			if (this._unspentScan === scan) this._unspentScan = null;
+		});
+
+		// The first good answer stays until a newer one replaces it
+		if (!this._unspentScan) {
+			this._unspentScan = scan;
+		} else {
+			scan.then(() => { this._unspentScan = scan; }, () => {});
 		}
+
+		return scan;
 	},
 
 	/**
-	 * Fetch Ergopad vesting data
+	 * A page of unspent boxes, newest first: { items, total, complete }.
+	 * total is a lower bound when complete is false.
 	 */
-	getErgopadVesting() {
-		return new Promise((resolve, reject) => {
-			$.ajax({
-				type: 'POST',
-				url: 'https://api.ergopad.io/vesting/v2/',
-				data: JSON.stringify({ addresses: [AddressState.walletAddress] }),
-				contentType: 'application/json; charset=utf-8',
-				dataType: 'json',
-				success: (data) => resolve(data),
-				error: () => reject(new Error('Ergopad vesting fetch failed'))
-			});
-		});
-	},
+	async getUnspentBoxes(boxOffset = AddressState.unspentBoxesOffset, limit = AddressState.unspentBoxesPageSize, refresh = false) {
+		const scan = await this.scanUnspentBoxes(refresh);
+		let items;
 
-	/**
-	 * Fetch Ergopad staking data
-	 */
-	getErgopadStaking() {
-		return new Promise((resolve, reject) => {
-			$.ajax({
-				type: 'POST',
-				url: 'https://api.ergopad.io/staking/staked-all/',
-				data: JSON.stringify({ addresses: [AddressState.walletAddress] }),
-				contentType: 'application/json; charset=utf-8',
-				dataType: 'json',
-				success: (data) => resolve(data),
-				error: () => reject(new Error('Ergopad staking fetch failed'))
-			});
-		});
+		if (scan.complete) {
+			const newestFirst = scan.boxes.slice().reverse();
+			items = newestFirst.slice(boxOffset, boxOffset + limit).map(box => Object.assign({}, box));
+		} else {
+			items = await readUnspent(AddressState.walletAddress, boxOffset, limit, { newestFirst: true });
+		}
+
+		await LiteNode.withTokensNormalized(items);
+
+		return { items, total: scan.boxes.length, complete: scan.complete };
 	}
 };

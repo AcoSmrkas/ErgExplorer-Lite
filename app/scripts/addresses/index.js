@@ -4,60 +4,16 @@
  */
 
 import { AddressState } from './state.js';
-import { ApiClient } from './api-client.js?v=59';
-import { BalanceSummary } from './balance-summary.js?v=74';
-import { AddressDetails } from './address-details.js?v=65';
-import { TransactionFormatter } from './transaction-formatter.js?v=85';
+import { ApiClient } from './api-client.js?v=60';
+import { BalanceSummary } from './balance-summary.js?v=75';
+import { AddressDetails } from './address-details.js?v=66';
+import { TransactionFormatter } from './transaction-formatter.js?v=86';
 import { UIControllers } from './ui-controllers.js?v=65';
-import { PendingTracker } from './pending-tracker.js?v=9';
+import { PendingTracker } from './pending-tracker.js?v=10';
 import { NftManager } from './nft-manager.js?v=1';
-import { MiningPanel } from './mining.js?v=1';
-import { StorageRentNotice } from './storage-rent.js?v=1';
+import { MiningPanel } from './mining.js?v=2';
+import { StorageRentNotice } from './storage-rent.js?v=2';
 import { getTxType, isWalletAddress, getTxInOutType, analyzeTransfers } from './transaction-analyzer.js?v=9';
-
-/**
- * Friendly addressbook URLs, e.g. /addresses/FAKU-Treasury -> the real address.
- * A slug is built from an addressbook entry's name + urltype:
- *   { name: 'FAKU', urltype: 'Treasury' } -> 'faku-treasury'
- *   { name: 'Mew Finance', urltype: 'Treasury' } -> 'mew-finance-treasury'
- */
-function isErgoAddress(value) {
-	// Real Ergo addresses are Base58 and at least ~40 chars; slugs are short and/or contain '-'.
-	return /^[1-9A-HJ-NP-Za-km-z]{40,}$/.test(value);
-}
-
-function slugifyAddressbookName(value) {
-	return String(value || '')
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-+|-+$/g, '');
-}
-
-async function resolveAddressbookSlug(slug) {
-	// Decode first so a literal/encoded space (e.g. "Mew Finance-Treasury" -> "Mew%20Finance-Treasury")
-	// slugifies the same as the hyphenated form "Mew-Finance-Treasury".
-	let decoded = slug;
-	try { decoded = decodeURIComponent(slug); } catch (e) { /* malformed escape: use raw */ }
-
-	const target = slugifyAddressbookName(decoded);
-	if (target === '') return null;
-
-	const url = ERGEXPLORER_API_HOST + 'addressbook/getAddresses?offset=0&limit=1000&type=&order=&query=&testnet=' + (networkType === 'testnet' ? '1' : '0');
-
-	try {
-		const response = await fetch(url);
-		if (!response.ok) return null;
-
-		const data = await response.json();
-		const items = (data && data.items) || [];
-		const match = items.find(item => slugifyAddressbookName((item.name || '') + ' ' + (item.urltype || '')) === target);
-
-		return match ? match.address : null;
-	} catch (error) {
-		console.warn('Failed to resolve addressbook slug:', error);
-		return null;
-	}
-}
 
 const ADDRESS_SECTION_TABS = {
 	ownedNfts: {
@@ -89,21 +45,9 @@ let activeAddressSectionTab = null;
 
 // Initialize on document ready
 $(async function() {
-	const addressFromUrl = getWalletAddressFromUrl();
 	BalanceSummary.showLoading();
 
-	// Friendly addressbook URLs (e.g. /addresses/FAKU-Treasury): resolve the slug to the
-	// real address but keep the friendly URL in the bar. Normal addresses skip this, so
-	// no extra request is made for them.
-	let walletAddress = addressFromUrl;
-	if (addressFromUrl && !isErgoAddress(addressFromUrl)) {
-		const resolved = await resolveAddressbookSlug(addressFromUrl);
-		if (resolved) {
-			walletAddress = resolved;
-		}
-	}
-
-	AddressState.walletAddress = walletAddress;
+	AddressState.walletAddress = getWalletAddressFromUrl();
 	setDocumentTitle(AddressState.walletAddress);
 	PendingTracker.init({
 		refresh: (confirmed) => {
@@ -131,17 +75,12 @@ function watchScrollingLists() {
 async function initializeAddressPage() {
 	ApiClient.prefetch({ mempool: isFirstPage() });
 
-	// The scam list, token icons and prices are only needed to render, so they load in
-	// parallel and the page renders once all three have answered or failed.
-	let initRequestsLeft = 3;
+	// Token icons and prices are only needed to render, so they load in parallel and the page
+	// renders once both have answered or failed.
+	let initRequestsLeft = 2;
 	const onInitRequestDone = () => {
 		if (--initRequestsLeft === 0) onInitRequestsFinished();
 	};
-
-	ApiClient.getScamList()
-		.then(scamList => { AddressState.scamList = scamList; })
-		.catch(error => console.warn('Failed to load scam list:', error))
-		.finally(onInitRequestDone);
 
 	if (typeof getTokenIcons === 'function') {
 		getTokenIcons(onInitRequestDone);
@@ -157,20 +96,38 @@ async function initializeAddressPage() {
 		onInitRequestDone();
 	}
 
-	if (typeof getIssuedNfts === 'function') {
-		getIssuedNfts(AddressState.walletAddress, onGotIssuedNftInfo, false);
-	} else {
-		console.warn('getIssuedNfts function not found');
-	}
-
 	// Rewards unlock a day after their block, so the tab loads once and the 60s refresh leaves it alone.
 	MiningPanel.load(AddressState.walletAddress)
-		.then(count => setAddressSectionTabAvailable('mining', count))
+		.then(count => {
+			setAddressSectionTabAvailable('mining', count);
+			// The node lists the newest 100; past that the count is a floor
+			if (count >= 100) $('#miningTab .address-section-tab-count').text('(100+)');
+		})
 		.catch(error => console.warn('Mining tab unavailable:', error));
 
 	// Loads once, like the Mining tab: a consolidation shows up after a reload.
-	StorageRentNotice.load(AddressState.walletAddress)
+	StorageRentNotice.load(AddressState.walletAddress, () => ApiClient.scanUnspentBoxes())
 		.catch(error => console.warn('Storage rent notice unavailable:', error));
+}
+
+/**
+ * Tokens and NFTs this address minted, found in its recent txs (nft.js). Tokens without an NFT
+ * type are kept: they fill the Issued Assets "Tokens" tab. It reads the same tx list as the table,
+ * so it waits for the table: a node slow on a long history then serves the table first.
+ */
+let issuedAssetsRequested = false;
+
+function loadIssuedAssets(walletAddress) {
+	if (issuedAssetsRequested) return;
+	issuedAssetsRequested = true;
+
+	if (typeof findIssuedTokenIds !== 'function' || typeof getNftsInfo !== 'function') return;
+
+	findIssuedTokenIds(walletAddress)
+		.then(ids => {
+			if (ids.length > 0) getNftsInfo(ids.reverse(), onGotIssuedNftInfo, false);
+		})
+		.catch(error => console.warn('Issued assets unavailable:', error));
 }
 
 /**
@@ -293,12 +250,14 @@ async function printUnspentBoxes(force = false) {
 	}
 
 	try {
-		const data = await ApiClient.getUnspentBoxes();
+		const data = await ApiClient.getUnspentBoxes(AddressState.unspentBoxesOffset, AddressState.unspentBoxesPageSize, !AddressState.firstTime);
 		AddressState.printedUnspentBoxes = true;
 
 		if (!data || !data.items || data.items.length === 0) {
 			if (data && data.total > 0 && AddressState.unspentBoxesOffset > 0) {
-				AddressState.unspentBoxesOffset = getLastUnspentBoxesOffset(data.total);
+				AddressState.unspentBoxesOffset = data.complete === false
+					? Math.max(0, AddressState.unspentBoxesOffset - AddressState.unspentBoxesPageSize)
+					: getLastUnspentBoxesOffset(data.total);
 				AddressState.printedUnspentBoxes = false;
 				await printUnspentBoxes(true);
 				return;
@@ -325,30 +284,40 @@ function renderUnspentBoxes(data) {
 	});
 
 	AddressState.unspentBoxesCount = data.total;
+	// Past what the page reads whole, the count is a floor and pages go on while they come back full
+	AddressState.unspentBoxesComplete = data.complete !== false;
+	AddressState.unspentBoxesPageFull = data.items.length >= AddressState.unspentBoxesPageSize;
+	const countText = data.total.toLocaleString('en-US') + (AddressState.unspentBoxesComplete ? '' : '+');
 	$('#unspentBoxesHolder').html(html);
-	$('#unspentBoxesHeading').html('<strong>Unspent Boxes</strong> (' + AddressState.unspentBoxesCount + ') ');
+	$('#unspentBoxesHeading').html('<strong>Unspent Boxes</strong> (' + countText + ') ');
 	setAddressSectionTabAvailable('unspentBoxes', AddressState.unspentBoxesCount);
+	$('#unspentBoxesTab .address-section-tab-count').text('(' + countText + ')');
 	renderUnspentBoxesPagination();
 }
 
 function renderUnspentBoxesPagination() {
-	const totalPages = Math.ceil(AddressState.unspentBoxesCount / AddressState.unspentBoxesPageSize);
-	const currentPage = Math.floor(AddressState.unspentBoxesOffset / AddressState.unspentBoxesPageSize) + 1;
+	const pageSize = AddressState.unspentBoxesPageSize;
+	const complete = AddressState.unspentBoxesComplete !== false;
+	const totalPages = Math.ceil(AddressState.unspentBoxesCount / pageSize);
+	const currentPage = Math.floor(AddressState.unspentBoxesOffset / pageSize) + 1;
+	const isLast = complete ? currentPage >= totalPages : !AddressState.unspentBoxesPageFull;
 
-	if (totalPages <= 1) {
+	if (complete && totalPages <= 1) {
 		$('#unspentBoxesPagination').hide();
 		return;
 	}
 
-	const previousOffset = Math.max(0, AddressState.unspentBoxesOffset - AddressState.unspentBoxesPageSize);
-	const nextOffset = Math.min(getLastUnspentBoxesOffset(AddressState.unspentBoxesCount), AddressState.unspentBoxesOffset + AddressState.unspentBoxesPageSize);
+	const previousOffset = Math.max(0, AddressState.unspentBoxesOffset - pageSize);
+	const nextOffset = complete
+		? Math.min(getLastUnspentBoxesOffset(AddressState.unspentBoxesCount), AddressState.unspentBoxesOffset + pageSize)
+		: AddressState.unspentBoxesOffset + pageSize;
 
-	$('#unspentBoxesPageNum').html(nFormatter(currentPage, 0, true, true) + ' of ' + nFormatter(totalPages, 0, true, true));
+	$('#unspentBoxesPageNum').html(nFormatter(currentPage, 0, true, true) + (complete ? ' of ' + nFormatter(totalPages, 0, true, true) : ''));
 	$('#unspentBoxesPagination').toggle($('#unspentBoxesHolder').is(':visible'));
 	bindUnspentBoxesPageLink('.unspentFirstPageHolder', '.unspentFirstPage', 0, currentPage <= 1);
 	bindUnspentBoxesPageLink('.unspentPreviousPageHolder', '.unspentPreviousPage', previousOffset, currentPage <= 1);
-	bindUnspentBoxesPageLink('.unspentNextPageHolder', '.unspentNextPage', nextOffset, currentPage >= totalPages);
-	bindUnspentBoxesPageLink('.unspentLastPageHolder', '.unspentLastPage', getLastUnspentBoxesOffset(AddressState.unspentBoxesCount), currentPage >= totalPages);
+	bindUnspentBoxesPageLink('.unspentNextPageHolder', '.unspentNextPage', nextOffset, isLast);
+	bindUnspentBoxesPageLink('.unspentLastPageHolder', '.unspentLastPage', getLastUnspentBoxesOffset(AddressState.unspentBoxesCount), !complete || isLast);
 }
 
 function bindUnspentBoxesPageLink(holderSelector, linkSelector, boxOffset, disabled) {
@@ -370,7 +339,9 @@ async function showUnspentBoxesPage(e, boxOffset) {
 
 	activeAddressSectionTab = 'unspentBoxes';
 	syncAddressSectionTabs();
-	AddressState.unspentBoxesOffset = Math.max(0, Math.min(boxOffset, getLastUnspentBoxesOffset(AddressState.unspentBoxesCount)));
+	AddressState.unspentBoxesOffset = AddressState.unspentBoxesComplete === false
+		? Math.max(0, boxOffset)
+		: Math.max(0, Math.min(boxOffset, getLastUnspentBoxesOffset(AddressState.unspentBoxesCount)));
 	AddressState.printedUnspentBoxes = false;
 	$('#unspentBoxesHolder').show();
 	$('#unspentBoxesPagination').show();
@@ -534,6 +505,7 @@ function onMempoolAndTransactionsDataFetched() {
 	}
 
 	PendingTracker.onPendingTxsRendered(AddressState.mempoolData.items.map(tx => tx.id));
+	loadIssuedAssets(AddressState.walletAddress);
 
 	AddressState.printed = true;
 }
