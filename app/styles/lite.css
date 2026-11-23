@@ -1,17 +1,19 @@
 /* ErgExplorer Lite additions: the Lite tag, the node badge and the connect page */
 
+/* "lite" set as a small word against the bottom of the logo */
+.navbar-brand {
+	display: inline-flex;
+	align-items: flex-end;
+}
+
 .lite-tag {
-	display: inline-block;
-	margin-left: 6px;
-	padding: 1px 6px;
-	border: 1px solid var(--main-color);
-	border-radius: 4px;
+	margin-left: 3px;
+	margin-bottom: -2px;
 	color: var(--main-color);
-	font-size: 0.7rem;
+	font-size: 0.8rem;
 	font-weight: 600;
-	letter-spacing: 0.04em;
-	text-transform: uppercase;
-	vertical-align: middle;
+	line-height: 1;
+	letter-spacing: 0.01em;
 }
 
 /* The node picker in the nav, styled like the network menu it replaced: plain nav text with a
