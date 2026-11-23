@@ -1,55 +1,37 @@
-const GATEWAY_HOST = 'https://chain.mewfinance.com/';
+// The selected node's mempool, a page at a time. The node lists unconfirmed txs with their
+// full boxes but no arrival times, and /info gives how many there are.
 const MEMPOOL_REFRESH_MS = 20000;
-// The gateway serves node boxes, which have this tree where the other two sources have FEE_ADDRESS
+// The node answers at most 100 txs a request
+const MAX_PAGE = 100;
+// The miners' fee contract; node boxes carry the tree, normalised ones the address too
 const FEE_ERGO_TREE = '1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304';
 
 let shownMempoolRows = null;
 
 $(function() {
-    // Erg Explorer Live streams mainnet only
-    if (networkType == 'testnet') {
-        $('#liveCta').remove();
-    }
+    if (!LiteNode.getUrl()) return;
+
+    ITEMS_PER_PAGE = Math.min(Number(ITEMS_PER_PAGE) || 30, MAX_PAGE);
+    offset = Math.max(0, Number(offset) || 0);
 
     printMempool();
-    setInterval(updateAges, 1000);
     setInterval(() => {
         if (!document.hidden) printMempool(true);
     }, MEMPOOL_REFRESH_MS);
 });
 
-// Our node's pool first: it alone has both a total and when each tx arrived. The gateway has the same
-// pool but no times, and the explorer's list intermittently returns empty pages (items: [] with
-// total > 0) and misses txs that entered through other nodes. Each spells the sort its own way.
-function getMempoolSources() {
-    const query = '?limit=' + ITEMS_PER_PAGE + '&offset=' + offset + '&sortDirection=desc&sortBy=';
-
-    if (!MEMPOOL_API_HOST) {
-        return [() => $.get('https://api-testnet.ergoplatform.com/transactions/unconfirmed' + query + 'creationtimestamp')];
-    }
-
-    return [
-        () => $.get(MEMPOOL_API_HOST + 'transactions' + query + 'creationTimestamp'),
-        getGatewayPage,
-        () => $.get('https://api.ergoplatform.com/transactions/unconfirmed' + query + 'creationtimestamp')
-    ];
-}
-
-async function getGatewayPage() {
-    const pool = await $.get(GATEWAY_HOST + 'transactions/unconfirmed?limit=500&offset=0');
-    return { total: pool.length, items: pool.slice(Number(offset), Number(offset) + ITEMS_PER_PAGE) };
-}
-
 async function printMempool(isRefresh = false) {
     let data = null;
 
-    for (const getPage of getMempoolSources()) {
-        try {
-            data = await getPage();
-            break;
-        } catch (error) {
-            console.warn('Mempool source failed, trying the next:', error.statusText || error);
-        }
+    try {
+        const [info, items] = await Promise.all([
+            LiteNode.get('info'),
+            LiteNode.mempool(offset, ITEMS_PER_PAGE)
+        ]);
+
+        data = { items: items, total: Math.max(Number(info.unconfirmedCount) || 0, offset + items.length) };
+    } catch (error) {
+        console.warn('Mempool request failed:', error);
     }
 
     $('#txLoading').hide();
@@ -57,7 +39,7 @@ async function printMempool(isRefresh = false) {
     if (data) {
         printMempoolPage(data, isRefresh);
     } else if (!isRefresh) {
-        showLoadError('Failed to fetch mempool transactions.');
+        showLoadError('Could not load the mempool from this node.');
     }
 }
 
@@ -65,21 +47,20 @@ function printMempoolPage(data, isRefresh) {
     const items = data.items;
 
     // The pool shrank past this page while it was open
-    if (offset > 0 && offset >= data.total) {
+    if (offset > 0 && items.length == 0) {
         offset = Math.max(0, (Math.ceil(data.total / ITEMS_PER_PAGE) - 1) * ITEMS_PER_PAGE);
-        printMempool(isRefresh);
-        return;
+        if (data.total > 0) {
+            printMempool(isRefresh);
+            return;
+        }
     }
-
-    // An empty page of a pool that isn't empty is the glitch above: a refresh keeps what's on screen
-    if (isRefresh && items.length == 0 && data.total > 0) return;
 
     setupPagination(data.total);
     $('#pagination').toggle(items.length > 0);
+    $('#mempoolCount').text(data.total.toLocaleString('en-US') + (data.total == 1 ? ' transaction' : ' transactions'));
 
-    // The refresh mostly finds nothing new: leave the rows, and any text selected in them, alone then.
-    // Times count as new: rows from the gateway get their ages once our node's pool is back.
-    const shownRows = items.map(item => item.id + ':' + item.creationTimestamp).join();
+    // The refresh mostly finds nothing new: leave the rows, and any text selected in them, alone then
+    const shownRows = items.map(item => item.id).join();
     if (shownRows !== shownMempoolRows) {
         shownMempoolRows = shownRows;
         $('#transactionsTableBody').html(items.length > 0
@@ -96,9 +77,6 @@ function formatMempoolRow(item) {
     //Id
     row += '<td><span class="d-lg-none"><strong>Id: </strong></span><a href="' + getTransactionsUrl(item.id) + '">' + formatAddressString(item.id, 40) + '</a></td>';
 
-    //Age
-    row += '<td><span class="d-lg-none"><strong>Age: </strong></span>' + formatAgeHtml(item.creationTimestamp) + '</td>';
-
     //Inputs
     row += '<td><span class="d-lg-none"><strong>Inputs: </strong></span>' + item.inputs.length + '</td>';
 
@@ -114,34 +92,10 @@ function formatMempoolRow(item) {
     return row + '</tr>';
 }
 
-// updateAges keeps these counting. The gateway has no times, so its rows have no age.
-function formatAgeHtml(timestamp) {
-    if (!timestamp) return '<span class="text-light">&mdash;</span>';
-
-    return '<span class="mempool-age" data-time="' + timestamp + '" title="' + formatDateString(timestamp) + '">' + formatAge(timestamp) + '</span>';
-}
-
-function updateAges() {
-    $('.mempool-age').each(function() {
-        $(this).text(formatAge(Number($(this).attr('data-time'))));
-    });
-}
-
-function formatAge(timestamp) {
-    const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
-    if (seconds < 60) return seconds + 's ago';
-
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return minutes + ' min ago';
-
-    const hours = Math.floor(minutes / 60);
-    return hours + (hours == 1 ? ' hour ago' : ' hours ago');
-}
-
 function formatFeeHtml(item) {
     const fee = item.outputs
         .filter(output => output.address === FEE_ADDRESS || output.ergoTree === FEE_ERGO_TREE)
-        .reduce((total, output) => total + output.value, 0);
+        .reduce((total, output) => total.plus(output.value.toString()), new BigNumber(0));
 
-    return fee > 0 ? formatErgValueString(fee) : '<span class="text-light">&mdash;</span>';
+    return fee.isGreaterThan(0) ? formatErgValueString(fee.toFixed()) : '<span class="text-light">&mdash;</span>';
 }

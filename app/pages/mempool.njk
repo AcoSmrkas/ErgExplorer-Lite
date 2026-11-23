@@ -13,22 +13,9 @@
 	<div class="col-md-12">
 		<div class="row w-100">
 			<div class="col-md-12 mb-3 mb-md-4">
-				<h2 class="m-0">Mempool</h2>
+				<h2 class="m-0">Mempool <small id="mempoolCount" class="text-light"></small></h2>
 			</div>
 		</div>
-
-		<!-- The same pool, streamed: a way into live.ergexplorer.com (mainnet only, hidden on testnet by mempool.js) -->
-		<div id="liveCta" class="row w-100">
-			<a class="live-cta div-cell-dark" href="https://live.ergexplorer.com">
-				<span class="live-cta-text">
-					<strong>Watch the mempool in real time</strong>
-					<span>New transactions appear the moment they reach the network, labelled by what they do.</span>
-				</span>
-				<span class="live-cta-button">Open Live <i class="fas fa-arrow-right"></i></span>
-			</a>
-		</div>
-
-		<br>
 
 		<div id="mempoolHolder" style="display: none;">
 		
@@ -39,7 +26,6 @@
 					<thead>
 						<tr>
 							<th scope="col">Id</th>
-							<th scope="col">Age</th>
 							<th scope="col">Inputs</th>
 							<th scope="col">Outputs</th>
 							<th scope="col">Size</th>
@@ -64,5 +50,5 @@
 
 {% block scripts %}
 	<script src="./scripts/common/pagination.js?v=41"></script>
-	<script src="./scripts/mempool.js?v=44"></script>
+	<script src="./scripts/mempool.js?v=45"></script>
 {% endblock %}

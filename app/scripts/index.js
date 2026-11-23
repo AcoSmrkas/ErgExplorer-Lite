@@ -1,83 +1,196 @@
-var nowTime = Date.now();
-var from24h = nowTime - (24 * 60 * 60 * 1000);
-var from7d = nowTime - (7 * 24 * 60 * 60 * 1000);
-var from30d = nowTime - (30 * 24 * 60 * 60 * 1000);
-var priceData = undefined;
-// The token tables wait for the icon list: drawn before it, their DB-only icons (rsBTC, LIT...) stay blank
+// Homepage, read from the selected node: height and protocol info from /info and /emission,
+// ERG price from the oracle pool box, top tokens from the DEX pool boxes (prices.js), the 24h stats
+// from the last day's block headers, and the big transfers from the newest blocks.
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DAY_BLOCKS = 720;
+const MAX_SUPPLY_NANOERG = '97739924000000000';
+const REFRESH_MS = 5 * 60 * 1000;
+const TOP_TOKENS = 10;
+// Big transfers: the largest ERG moves in this many newest blocks, read this many blocks a request
+const SCAN_BLOCKS = 30;
+const SCAN_BATCH = 10;
+const BIG_TXS_SHOWN = 10;
+const ORACLE_BOX_PAGE = 100;
+
+// The token tables wait for the icon list: drawn before it, their icons stay blank
 var tokenIconsLoaded;
+// Full blocks already read, by header id: a refresh reads only the new ones
+const scannedBlocks = new Map();
+let newestTxCount = null;
 
 $(function() {
+	if (!LiteNode.getUrl()) return;
+
 	tokenIconsLoaded = new Promise(resolve => getTokenIcons(resolve));
-	updatePrices();
-	getNetworkState();
+	refresh();
 });
 
-function updatePrices() {
+function refresh() {
 	getPrices(onGotPrices);
-	getErgPrice();
+	getNetworkInfo();
+	getDayStats();
+	getBigTransfers();
 
-	setTimeout(updatePrices, 60000 * 5);
-}
-
-function getErgPrice() {
-	$.get('https://api.ergexplorer.com/tokens/getErgPrice', function (data) {
-		let difference = parseFloat(data.items[0].difference);
-		let classString = 'text-success';
-		if (difference < 0) {
-			classString = 'text-danger';
-		}
-
-		let ergPriceHtml = '$' + formatValue(parseFloat(data.items[0].value), 2);
-		setCountUpHtml('#ergPrice', ergPriceHtml + ' (<span class="' + classString + '">' + formatValue(difference, 2) + '%</span> 24h)');
-	});
+	setTimeout(refresh, REFRESH_MS);
 }
 
 function onGotPrices() {
-    getProtocolInfo();
-    getStats();
-	getWhaleTxs();
-	getPoolStats();	
-	getPriceHistory();
+	showErgPrice();
+	showTopTokens();
+	showMarketCap();
 }
 
-function getNetworkState() {
-	let networkStateUrl = 'https://api.ergoplatform.com/api/v1/networkState';
+function decimalString(value) {
+	return value == null ? '0' : value.toString();
+}
 
-	if (networkType == 'testnet') {
-		networkStateUrl = 'https://api-testnet.ergoplatform.com/api/v1/networkState'
+function ergNumber(nanoErg) {
+	return Number(new BigNumber(decimalString(nanoErg)).dividedBy(1e9).toString());
+}
+
+/* Height, version, supply */
+
+let circulatingNanoErg = null;
+
+async function getNetworkInfo() {
+	try {
+		const info = await LiteNode.get('info');
+		const height = Number(info.fullHeight);
+
+		setCountUpHtml('#blockHeight', height.toLocaleString('en-US'));
+		$('#ergVersion').removeClass('skeleton').text(String(info.appVersion || '').split('-')[0]).addClass('count-up-in');
+
+		const emission = await LiteNode.emissionAt(height);
+		circulatingNanoErg = decimalString(emission.totalCoinsIssued);
+
+		setCountUpHtml('#ergSupply', formatErgValueString(circulatingNanoErg, 0, true, true));
+		setCountUpHtml('#ergTotal', formatErgValueString(MAX_SUPPLY_NANOERG, 0, true, true));
+		showMarketCap();
+	} catch (e) {
+		console.warn('Network info failed', e);
+	}
+}
+
+function showMarketCap() {
+	if (circulatingNanoErg == null || !(prices['ERG'] > 0)) return;
+
+	setCountUpHtml('#marketCap', '$' + (prices['ERG'] * ergNumber(circulatingNanoErg)).toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 }));
+}
+
+/* ERG price and its 24h change, both from the ERG/USD oracle pool */
+
+async function showErgPrice() {
+	const price = prices['ERG'];
+
+	if (!(price > 0)) {
+		$('#ergPrice').removeClass('skeleton').html('<span class="text-light">&mdash;</span>');
+		return;
 	}
 
-	var jqxhr = $.get(networkStateUrl, function(data) {
-		setCountUpHtml('#blockHeight', data.height.toLocaleString('en-US', { maximumFractionDigits: 0, minimumFractionDigits: 0 }));
-	});
+	const priceHtml = '$' + formatValue(price, 2);
+	setCountUpHtml('#ergPrice', priceHtml);
+
+	try {
+		const dayAgo = await oracleRateDayAgo();
+		if (!(dayAgo > 0)) return;
+
+		const difference = (price / dayAgo - 1) * 100;
+		const classString = difference < 0 ? 'text-danger' : 'text-success';
+		setCountUpHtml('#ergPrice', priceHtml + ' (<span class="' + classString + '">' + formatValue(difference, 2) + '%</span> 24h)');
+	} catch (e) {
+		console.warn('No 24h ERG price', e);
+	}
 }
 
-function getPoolStats() {
-	$.get('https://api2.mewfinance.com/dex/getTop10Volume',
-	function (data) { tokenIconsLoaded.then(() => {
-		let poolStatsData = data.items;
+function oracleBoxRate(box) {
+	const r4 = box && box.additionalRegisters && box.additionalRegisters.R4;
+	const serialized = typeof r4 === 'string' ? r4 : (r4 && r4.serializedValue);
+	const nanoErgPerUsd = Number(qfleetSDK.SConstant.from(serialized).data);
 
-		//Volume
-		let formattedResult = '';
+	return nanoErgPerUsd > 0 ? 1e9 / nanoErgPerUsd : undefined;
+}
 
-		for (let i = 0; i < poolStatsData.length; i++) {
-			let poolStat = poolStatsData[i];
+function oracleBoxPage(offset) {
+	return LiteNode.get('blockchain/box/byTokenId/' + ERG_USD_ORACLE_POOL_NFT + '?offset=' + Math.max(0, Math.round(offset)) + '&limit=' + ORACLE_BOX_PAGE)
+		.then(page => (page && page.items) || []);
+}
 
-			formattedResult += '<tr>';
+// The pool box's history is newest first, a few rows a block: one page shows how many, which says
+// where the box of a day ago sits. Up to three pages.
+let dayAgoRatePromise = null;
 
-			//Token
-			formattedResult += '<td><a href="' + getTokenUrl(poolStat.asset) + '">' + getAssetTitleParams(null, poolStat.asset, poolStat.name, true) + '</a></td>';
-			
-			//Volume
-			formattedResult += '<td>$' + formatValue(poolStat.total_usd, 2) + '</td>';
+function oracleRateDayAgo() {
+	if (!dayAgoRatePromise) {
+		dayAgoRatePromise = findOracleRateDayAgo().catch(e => {
+			dayAgoRatePromise = null;
+			throw e;
+		});
+	}
 
-			formattedResult += getBuyCell(poolStat.asset);
+	return dayAgoRatePromise;
+}
 
-			formattedResult += '</tr>';
+async function findOracleRateDayAgo() {
+	let page = await oracleBoxPage(0);
+	if (page.length < 2) return undefined;
+
+	const target = Number(page[0].inclusionHeight) - DAY_BLOCKS;
+	const rowsPerBlock = (page.length - 1) / Math.max(1, Number(page[0].inclusionHeight) - Number(page[page.length - 1].inclusionHeight));
+	let pageOffset = 0;
+
+	for (let attempt = 0; attempt < 3; attempt++) {
+		const heights = page.map(box => Number(box.inclusionHeight));
+		const newest = heights[0];
+		const oldest = heights[heights.length - 1];
+
+		if (target <= newest && target >= oldest) {
+			return oracleBoxRate(page.find(box => Number(box.inclusionHeight) <= target));
 		}
 
-		$('#tokensVolumeTableBody').html(formattedResult);
-	}); });
+		pageOffset = target > newest
+			? pageOffset - (target - newest) * rowsPerBlock - ORACLE_BOX_PAGE / 2
+			: pageOffset + (newest - target) * rowsPerBlock - ORACLE_BOX_PAGE / 2;
+		pageOffset = Math.max(0, pageOffset);
+		page = await oracleBoxPage(pageOffset);
+
+		if (page.length == 0) return undefined;
+	}
+
+	return undefined;
+}
+
+/* Top tokens by DEX liquidity */
+
+function showTopTokens() {
+	tokenIconsLoaded.then(() => {
+		const ergUsd = prices['ERG'];
+		const top = tokenPriceList.slice(0, TOP_TOKENS);
+		let rows = '';
+
+		for (const token of top) {
+			const priceUsd = ergUsd > 0 ? token.price_erg * ergUsd : null;
+
+			rows += '<tr>';
+			rows += '<td><a href="' + getTokenUrl(token.id) + '">' + getAssetTitleParams(null, token.id, token.ticker, true) + '</a></td>';
+			rows += '<td>' + (priceUsd != null
+				? '$' + formatValue(priceUsd, getDecimals(priceUsd))
+				: formatValue(token.price_erg, getDecimals(token.price_erg)) + ' ERG') + '</td>';
+			rows += '<td>' + (ergUsd > 0
+				? '$' + Math.round(token.liquidity_erg * ergUsd).toLocaleString('en-US')
+				: Math.round(token.liquidity_erg).toLocaleString('en-US') + ' ERG') + '</td>';
+			rows += getBuyCell(token.id);
+			rows += '</tr>';
+		}
+
+		if (top.length == 0) {
+			rows = '<tr><td colspan="4" class="p-2 text-light">No pools found.</td></tr>';
+		}
+
+		$('#tokensLiquidityTableBody').html(rows);
+		$('#tokenView').show();
+		$('#tokenLoading').hide();
+	});
 }
 
 function getBuyCell(tokenId) {
@@ -90,386 +203,192 @@ function getBuyCell(tokenId) {
 	return '<td class="index-buy-cell"><a target="_new" rel="noopener" class="btn btn-info index-buy-btn" href="' + buyUrl + '">Buy</a></td>';
 }
 
-function getPriceHistory() {
-	$.post('https://api2.ergexplorer.com/tokens/getPriceHistory?cache',
-		{
-			'from': nowTime,
-			'milestones': 'true',
-			'period': '30d'
-		},
-	function(data) {
-		priceData = data;
+/* 24h stats: the last day's headers, emission at both ends, tx counts from global indexes */
 
-		handleCachedTimeframes(data);
+async function getDayStats() {
+	try {
+		const headers = (await LiteNode.lastHeaders(DAY_BLOCKS + 1)).slice().sort((a, b) => a.height - b.height);
+		const newest = headers[headers.length - 1];
+		const since = Number(newest.timestamp) - DAY_MS;
+		const day = headers.filter(header => Number(header.timestamp) > since);
+		const first = day[0];
+		// The block before the window ends it on the other side
+		const before = headers[headers.indexOf(first) - 1] || first;
+		const spanMs = Number(newest.timestamp) - Number(before.timestamp);
+		const blocks = day.length;
+		const averageMs = spanMs / Math.max(1, blocks);
+		const averageDifficulty = day.reduce((total, header) => total + Number(header.difficulty), 0) / Math.max(1, blocks);
 
-		tokenIconsLoaded.then(() => printGainersLosers(from24h));
-	}).fail(function (data) {
-		$('#tokenLoading').hide();
-	});
-}
+		setCountUpHtml('#statsBlocksMined', '<p>' + blocks.toLocaleString('en-US') + '</p>');
+		setCountUpHtml('#statsAverageMiningTime', '<p>' + millisToMinutesAndSeconds(averageMs) + '</p>');
+		setCountUpHtml('#statsDifficulty', '<p title="Average hashes needed to find a block: ' + Number(newest.difficulty).toLocaleString('en-US') + '">' + (Number(newest.difficulty) / 1e12).toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 }) + ' T</p>');
+		setCountUpHtml('#statsHashRate', '<p>' + formatHashRateString(Math.round(averageDifficulty / (averageMs / 1000))) + '</p>');
 
-function printGainersLosers30d() {
-	printGainersLosers(from30d);
-	$('#showGainersLosers30d').removeClass('btn-primary');
-	$('#showGainersLosers30d').addClass('btn-info');
-	$('#showGainersLosers24h').removeClass('btn-info');
-	$('#showGainersLosers24h').addClass('btn-primary');
-	$('#showGainersLosers7d').removeClass('btn-info');
-	$('#showGainersLosers7d').addClass('btn-primary');
-}
+		// The index can be a block or two behind the tip: count txs up to its newest block
+		const indexed = await LiteNode.get('blockchain/indexedHeight');
+		const newestIndexed = day.filter(header => header.height <= Number(indexed.indexedHeight)).pop() || newest;
 
-function printGainersLosers7d() {
-	printGainersLosers(from7d);
-	$('#showGainersLosers7d').removeClass('btn-primary');
-	$('#showGainersLosers7d').addClass('btn-info');
-	$('#showGainersLosers24h').removeClass('btn-info');
-	$('#showGainersLosers24h').addClass('btn-primary');
-	$('#showGainersLosers30d').removeClass('btn-info');
-	$('#showGainersLosers30d').addClass('btn-primary');
-}
+		const [emissionNow, emissionBefore, newestBlock, firstBlock] = await Promise.all([
+			LiteNode.emissionAt(newest.height),
+			LiteNode.emissionAt(before.height),
+			LiteNode.get('blockchain/block/byHeaderId/' + newestIndexed.id),
+			LiteNode.get('blockchain/block/byHeaderId/' + first.id)
+		]);
 
-function printGainersLosers24h() {
-	printGainersLosers(from24h);
-	$('#showGainersLosers24h').removeClass('btn-primary');
-	$('#showGainersLosers24h').addClass('btn-info');
-	$('#showGainersLosers7d').removeClass('btn-info');
-	$('#showGainersLosers7d').addClass('btn-primary');
-	$('#showGainersLosers30d').removeClass('btn-info');
-	$('#showGainersLosers30d').addClass('btn-primary');
-}
+		const mined = new BigNumber(decimalString(emissionNow.totalCoinsIssued)).minus(decimalString(emissionBefore.totalCoinsIssued));
+		setCountUpHtml('#statsCoinsMined', formatStatsErgHtml(mined.toFixed(), 0));
 
-function handleCachedTimeframes(data) {
-	let hasLastTimestamp = false;
-	for (let i = 0; i < data.items.length; i++) {
-		if (data.items[i].originaltimestamp == from24h) {
-			hasLastTimestamp = true;
-			break;
+		const newestTxs = newestBlock.transactions || [];
+		const firstTxs = firstBlock.transactions || [];
+
+		if (newestTxs.length > 0 && firstTxs.length > 0) {
+			const total = Number(newestTxs[newestTxs.length - 1].globalIndex) + 1;
+			const dayCount = total - Number(firstTxs[0].globalIndex);
+
+			showTotalTransactions(total);
+			setCountUpHtml('#statsNumberOfTransactions', '<p>' + dayCount.toLocaleString('en-US') + '</p>');
 		}
-	}
-
-	if (!hasLastTimestamp) {
-		from24h = data.items[0].originaltimestamp;
-
-		nowTime = from24h + (24 * 60 * 60 * 1000)
-		from7d = nowTime - (7 * 24 * 60 * 60 * 1000);
-		from30d = nowTime - (30 * 24 * 60 * 60 * 1000);
+	} catch (e) {
+		console.warn('24h stats failed', e);
+		$('#statsHolder .skeleton, #totalTransactions').removeClass('skeleton');
 	}
 }
 
-function printGainersLosers(timeframe) {
-	let data = JSON.parse(JSON.stringify(priceData));
+function showTotalTransactions(total) {
+	if (newestTxCount != null && total < newestTxCount) return;
 
-	let lastTimestamp = timeframe;	
-	console.log(lastTimestamp);
-
-	for (var i = data.items.length - 1; i >= 0; i--) {
-		let item = data.items[i];
-		if (item.originaltimestamp != lastTimestamp
-			|| item.ticker == 'ERG') {
-			data.items.splice(i, 1);
-			continue;
-		}
-
-		let oldPrice = item.price;
-		let newPrice = prices[item.tokenid];
-
-		if (newPrice == undefined) {
-			data.items.splice(i, 1);
-			continue;
-		}
-
-		let difference = (newPrice * 100 / oldPrice) - 100;
-		if (difference === 0) {
-			difference = 0.000001;
-		}
-
-		difference = toFixed(difference, 2);
-
-		data.items[i].difference = difference;
-	}
-
-	data.items = data.items.sort(function (a, b) {
-		if (a.difference === b.difference) return 0;
-
-		return parseFloat(a.difference) > parseFloat(b.difference) ? -1 : 1;
-	});
-
-	//Erg
-	for (let i = 0; i < data.items.length; i++) {
-		let item = data.items[i];
-		let difference = item.difference;
-		let classString = 'text-success';
-
-		if (difference > 0) {
-			difference = '+' + difference;
-		} else {
-			difference = difference;
-			classString = 'text-danger';
-		}	
-
-		if (item.tokenid == 'ERG') {		
-			data.items.splice(i, 1);
-
-			break;
-		}
-	}
-
-	//Gainers
-	let formattedResult = '';
-	let end = 5;
-	for (let i = 0; i < end; i++) {
-		let item = data.items[i];
-		let difference = item.difference;
-		let classString = 'text-success';
-
-		if (difference >= 0) {
-			difference = '+' + difference;
-		} else {
-			difference = difference;
-			classString = 'text-danger';
-		}			
-
-		$('#change-' + item.tokenid).html(difference + '%');
-		$('#change-' + item.tokenid).addClass(classString);
-
-		formattedResult += '<tr>';
-
-		//Token
-		formattedResult += '<td><a href="' + getTokenUrl(item.tokenid) + '">' + getAssetTitleParams(item, item.tokenid, item.ticker, true) + '</a></td>';
-		
-		//Price			
-		let decimals = getDecimals(prices[item.tokenid]);
-		
-		formattedResult += '<td>$' + formatValue(prices[item.tokenid], decimals) + '</td>';
-
-		//Change
-		formattedResult += '<td><span class="' + classString + '">' + difference + '%</span></td>';
-
-		formattedResult += getBuyCell(item.tokenid);
-
-		formattedResult += '</tr>';
-
-		if (i == 4) {
-			i = data.items.length - end - 1;
-			end = data.items.length;
-		}
-	}
-
-	$('#tokensGainersTableBody').html (formattedResult);
-
-	$('#tokenView').show();
-	$('#tokenLoading').hide();
+	newestTxCount = total;
+	setCountUpHtml('#totalTransactions', total.toLocaleString('en-US'));
 }
 
-function getWhaleTxs() {
-	if (networkType == 'testnet') {
-		return;
+/* Big transfers: in each tx of the newest blocks, what every address gained or gave in ERG */
+
+async function getBigTransfers() {
+	try {
+		const [lastHeaders, indexed] = await Promise.all([LiteNode.lastHeaders(SCAN_BLOCKS), LiteNode.get('blockchain/indexedHeight')]);
+		// Blocks past the node's index are read on the next refresh
+		const headers = lastHeaders
+			.filter(header => header.height <= Number(indexed.indexedHeight))
+			.sort((a, b) => b.height - a.height);
+		const wanted = headers.map(header => header.id);
+
+		for (const id of Array.from(scannedBlocks.keys())) {
+			if (!wanted.includes(id)) scannedBlocks.delete(id);
+		}
+
+		const missing = wanted.filter(id => !scannedBlocks.has(id));
+
+		for (let i = 0; i < missing.length; i += SCAN_BATCH) {
+			const blocks = await LiteNode.post('blockchain/block/byHeaderIds', missing.slice(i, i + SCAN_BATCH));
+
+			for (const block of blocks || []) {
+				scannedBlocks.set(block.header.id, blockTransfers(block));
+				noteNewestTxCount(block);
+			}
+
+			showBigTransfers(headers.length);
+		}
+
+		showBigTransfers(headers.length);
+	} catch (e) {
+		console.warn('Big transfers failed', e);
+
+		if (scannedBlocks.size == 0) {
+			$('#txView').hide();
+		}
 	}
+}
 
-	fetch(ERGEXPLORER_API_HOST + 'transactions/getWhaleTxs') // Replace with your URL
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        return response.arrayBuffer(); // Convert the response to an ArrayBuffer
-    })
-    .then(arrayBuffer => {
-        // Handle the ArrayBuffer here
-        const buffer = new TextDecoder("utf-8").decode(arrayBuffer);
-        const stringFromBuffer = buffer.toString('utf8');
+function noteNewestTxCount(block) {
+	const txs = block.transactions || [];
+	if (txs.length == 0) return;
 
-        let data = JSONbig.parse(stringFromBuffer);
-        let formattedResult = '';
-		let transfers = groupWhaleTxs(data.items);
-		let lookups = [];
+	showTotalTransactions(Number(txs[txs.length - 1].globalIndex) + 1);
+}
 
-		for (var i = 0; i < transfers.length; i++) {
-			let transfer = transfers[i];
-			let item = transfer.item;
-			let value = getWhaleTransferValue(transfer);
+// Only what the table needs is kept from each block
+function blockTransfers(block) {
+	const transfers = [];
 
-			formattedResult += '<tr>';
+	for (const tx of block.transactions || []) {
+		const net = new Map();
+		const add = (box, sign) => {
+			const address = box.address || getBoxAddress(box);
+			if (!address || address == FEE_ADDRESS) return;
 
-			//Tx
-			formattedResult += '<td><span class="d-lg-none"><strong>Tx: </strong></span><a href="' + getTransactionsUrl(item.txid) + '"><i class="fas fa-link text-info"></i></a><span class="d-inline d-lg-none text-white float-end">' + formatDateString(parseInt(item.time)) + '</span></td>';
+			net.set(address, (net.get(address) || 0) + sign * Number(decimalString(box.value)));
+		};
 
-			//Time
-			formattedResult += '<td class="d-none d-lg-table-cell"><span class="d-lg-none"><strong>Time: </strong></span>' + formatDateString(parseInt(item.time)) + '</td>';
+		(tx.inputs || []).forEach(box => add(box, -1));
+		(tx.outputs || []).forEach(box => add(box, 1));
 
-			//From
-			formattedResult += '<td><span class="d-lg-none"><strong>From: </strong></span>' + formatWhaleParties(transfer.from, 'sending', i) + '</td>';
+		const from = [];
+		const to = [];
+		let value = 0;
 
-			//To
-			formattedResult += '<td><span class="d-lg-none"><strong>To: </strong></span>' + formatWhaleParties(transfer.to, 'receiving', i) + '</td>';
-
-			//Value
-			formattedResult += '<td><span class="d-lg-none"><strong>Value: </strong></span>' + formatAssetValueString(value, item.decimals) + ' ' + getAssetTitleParams(item, item.tokenid, item.ticker, false) + ' <span class="text-light">' + formatDollarPriceString(value / Math.pow(10, item.decimals) * prices[item.tokenid]) + '</span></td></tr>';
-
-			formattedResult += '</tr>';
-
-			if (transfer.from.length == 0 || transfer.to.length == 0) {
-				lookups.push(fillWhaleCounterparty(transfer, i));
+		for (const [address, change] of net) {
+			if (change > 0) {
+				to.push({ address, change });
+				value += change;
+			} else if (change < 0) {
+				from.push({ address, change });
 			}
 		}
 
-		$('#transactionsTableBody').html(formattedResult);
-		$('#txView').show();
-
-		getAddressesInfo();
-
-		//Label the counterparties the lookups found too
-		if (lookups.length > 0) {
-			Promise.all(lookups).then(getAddressesInfo);
-		}
-    })
-    .catch(error => {
-        console.error('Fetch error:', error); // Handle errors here
-    });
-}
-
-//The API stores a transfer between several parties as one row per party: the
-//senders' rows carry 'N/A' as toaddress, the receivers' rows 'N/A' as fromaddress.
-//This joins the rows of each tx and token back into one transfer.
-function groupWhaleTxs(items) {
-	let transfers = [];
-	let splitTransfers = {};
-
-	for (let i = 0; i < items.length; i++) {
-		let item = items[i];
-		let from = { address: item.fromaddress, value: item.value };
-		let to = { address: item.toaddress, value: item.value };
-
-		if (from.address != AddressType.NA && to.address != AddressType.NA) {
-			transfers.push({ item: item, from: [from], to: [to] });
-			continue;
-		}
-
-		let key = item.txid + '-' + item.tokenid;
-		let transfer = splitTransfers[key];
-
-		if (transfer == undefined) {
-			transfer = splitTransfers[key] = { item: item, from: [], to: [] };
-			transfers.push(transfer);
-		}
-
-		if (to.address == AddressType.NA) {
-			transfer.from.push(from);
-		} else {
-			transfer.to.push(to);
+		if (value > 0) {
+			transfers.push({ id: tx.id, time: Number(tx.timestamp || block.header.timestamp), value: value, from: from, to: to });
 		}
 	}
 
 	return transfers;
 }
 
-//The larger side, as the whale alert counts it: what the senders put in or what the receivers got
-function getWhaleTransferValue(transfer) {
-	let sum = function(parties) {
-		return parties.reduce((total, party) => total.plus(party.value.toString()), new BigNumber(0));
-	};
+function showBigTransfers(blockCount) {
+	const all = [];
 
-	return BigNumber.max(sum(transfer.from), sum(transfer.to)).toFixed();
+	for (const transfers of scannedBlocks.values()) all.push(...transfers);
+
+	const shown = all
+		.sort((a, b) => b.value - a.value)
+		.slice(0, BIG_TXS_SHOWN)
+		.sort((a, b) => b.time - a.time);
+
+	let rows = '';
+
+	for (const transfer of shown) {
+		rows += '<tr>';
+		rows += '<td><span class="d-lg-none"><strong>Tx: </strong></span><a href="' + getTransactionsUrl(transfer.id) + '"><i class="fas fa-link text-info"></i></a><span class="d-inline d-lg-none text-white float-end">' + formatDateString(transfer.time) + '</span></td>';
+		rows += '<td class="d-none d-lg-table-cell">' + formatDateString(transfer.time) + '</td>';
+		rows += '<td><span class="d-lg-none"><strong>From: </strong></span>' + formatTransferParties(transfer.from, 'sending') + '</td>';
+		rows += '<td><span class="d-lg-none"><strong>To: </strong></span>' + formatTransferParties(transfer.to, 'receiving') + '</td>';
+		rows += '<td><span class="d-lg-none"><strong>Value: </strong></span>' + formatErgValueString(transfer.value) + ' <span class="text-light">' + formatAssetDollarPriceString(transfer.value, ERG_DECIMALS, 'ERG') + '</span></td>';
+		rows += '</tr>';
+	}
+
+	if (shown.length == 0) {
+		rows = '<tr><td colspan="5" class="p-2 text-light">No transfers yet.</td></tr>';
+	}
+
+	$('#bigTxBlocks').text(blockCount);
+	$('#transactionsTableBody').html(rows);
+	$('#txView').show();
+
+	getAddressesInfo();
 }
 
-function formatWhaleParties(parties, side, index) {
-	//Filled in by fillWhaleCounterparty
+function formatTransferParties(parties, side) {
 	if (parties.length == 0) {
-		return '<span id="whaleCounterparty' + index + '" class="skeleton"></span>';
+		return '<span class="text-light">&mdash;</span>';
 	}
 
 	if (parties.length > 1) {
 		return '<span class="text-light" title="This transaction has multiple ' + side + ' addresses. Check transaction link for more details.">' + AddressType.Multiple + '</span>';
 	}
 
-	return formatWhaleAddress(parties[0].address);
-}
-
-function formatWhaleAddress(address) {
+	const address = parties[0].address;
 	addAddress(address);
 
-	return '<a class="address-string" addr="' + address + '" href="' + getWalletAddressUrl(address) + '" >' + (getOwner(address) == undefined ? formatAddressString(address, 10) : getOwner(address)) + '</a>';
-}
-
-//A transfer with no row for one side: the API returns only the latest rows, which
-//can cut a transfer in half, and it leaves out receivers the sender owns too. The
-//tx itself names the counterparty: the address that gained (or gave) the most of the token.
-function fillWhaleCounterparty(transfer, index) {
-	let receiving = transfer.to.length == 0;
-
-	return fetch(API_HOST + 'transactions/' + transfer.item.txid, { signal: AbortSignal.timeout(10000) })
-	.then(response => {
-		if (!response.ok) {
-			throw new Error('Network response was not ok');
-		}
-
-		return response.arrayBuffer();
-	})
-	.then(arrayBuffer => {
-		let tx = JSONbig.parse(new TextDecoder('utf-8').decode(arrayBuffer));
-
-		return getLargestCounterparty(tx, transfer.item.tokenid, receiving);
-	})
-	.catch(() => null)
-	.then(address => {
-		let html = '<span class="text-light" title="Check transaction link for more details.">Unknown</span>';
-
-		if (address != null) {
-			html = formatWhaleAddress(address);
-		}
-
-		$('#whaleCounterparty' + index).replaceWith(html);
-	});
-}
-
-function getLargestCounterparty(tx, tokenId, receiving) {
-	let net = {};
-
-	let count = function(boxes, sign) {
-		for (let i = 0; i < boxes.length; i++) {
-			let box = boxes[i];
-			let amount = tokenId == 'ERG' ? box.value : (box.assets || []).filter(asset => asset.tokenId == tokenId).reduce((total, asset) => total.plus(asset.amount.toString()), new BigNumber(0));
-
-			net[box.address] = (net[box.address] || new BigNumber(0)).plus(new BigNumber(amount.toString()).times(sign));
-		}
-	};
-
-	count(tx.outputs, receiving ? 1 : -1);
-	count(tx.inputs, receiving ? -1 : 1);
-	delete net[FEE_ADDRESS];
-
-	let largest = null;
-	for (let address in net) {
-		if (net[address].isGreaterThan(0) && (largest == null || net[address].isGreaterThan(net[largest]))) {
-			largest = address;
-		}
-	}
-
-	return largest;
-}
-
-function getProtocolInfo() {
-	const xhr = new XMLHttpRequest();
-
-	xhr.addEventListener('readystatechange', function () {
-	  if (this.readyState === this.DONE) {
-	  	let data = JSON.parse(this.response);
-
-	    $('#ergVersion').html(data.version).addClass('count-up-in');
-	    setCountUpHtml('#ergSupply', formatErgValueString(data.supply, 0, true, true));
-	    setCountUpHtml('#ergTotal', formatErgValueString(97739924000000000, 0, true, true));
-	    $('#ergHashRate').html(formatHashRateString(data.hashRate));
-	    $('#ergTxAvg').html(data.transactionAverage);
-
-    	setCountUpHtml('#marketCap', '$' + (prices['ERG'] * getAssetValue(data.supply, ERG_DECIMALS)).toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 }));
-	  }
-	});
-
-	xhr.open('GET', 'https://api.ergoplatform.com/info');
-	xhr.setRequestHeader('content-type', 'application/json');
-
-	xhr.withCredentials = false;
-
-	xhr.send();
+	return '<a class="address-string" addr="' + address + '" href="' + getWalletAddressUrl(address) + '" >' + formatAddressString(address, 10) + '</a>';
 }
 
 //Sets html and counts every number in it up to its value. On a refresh it
@@ -589,42 +508,4 @@ function setCountUpHtml(selector, html) {
 
 function formatStatsErgHtml(value, maxDecimals = 4) {
 	return '<p class="text-white">' + formatErgValueString(value, maxDecimals, false, true) + ' <span class="text-light">' + formatAssetDollarPriceString(value, ERG_DECIMALS, 'ERG') + '</span></p>';
-}
-
-//Small percentages come back with 7+ decimals; keep 3 significant digits
-function formatStatsPercent(value) {
-	return parseFloat(Number(value).toPrecision(3)) + '%';
-}
-
-function getStats() {
-	let statsUrl = 'https://api.ergoplatform.com/stats';
-
-	if (networkType == 'testnet') {
-		statsUrl = 'https://api-testnet.ergoplatform.com/stats';
-	}
-
-	var jqxhr = $.get(statsUrl, function(data) {
-		//Blocks summary
-		setCountUpHtml('#statsBlocksMined', '<p>' + data.blockSummary.total.toLocaleString('en-US') + '</p>');
-		setCountUpHtml('#statsAverageMiningTime', '<p>' + millisToMinutesAndSeconds(data.blockSummary.averageMiningTime) + '</p>');
-		setCountUpHtml('#statsCoinsMined', formatStatsErgHtml(data.blockSummary.totalCoins, 0));
-
-		//Transactions summary
-		const transactionCount = data.transactionsSummary.total.toLocaleString('en-US', { maximumFractionDigits: 0, minimumFractionDigits: 0 });
-		setCountUpHtml('#totalTransactions', transactionCount);
-		setCountUpHtml('#statsNumberOfTransactions', '<p>' + transactionCount + '</p>');
-		setCountUpHtml('#statsTotalTransactionFees', formatStatsErgHtml(data.transactionsSummary.totalFee));
-
-		//Mining cost
-		setCountUpHtml('#statsTotalMinersRevenue', formatStatsErgHtml(data.miningCost.totalMinersRevenue));
-		setCountUpHtml('#statsEarnedFromTransactionFees', '<p title="' + data.miningCost.percentEarnedTransactionsFees + '%">' + formatStatsPercent(data.miningCost.percentEarnedTransactionsFees) + '</p>');
-		setCountUpHtml('#statsOfTransactionVolume', '<p title="' + data.miningCost.percentTransactionVolume + '%">' + formatStatsPercent(data.miningCost.percentTransactionVolume) + '</p>');
-		setCountUpHtml('#statsCostPerTransaction', formatStatsErgHtml(data.miningCost.costPerTransaction));
-		//Difficulty = average hashes needed to find a block, so show it in trillions like the hash rate
-		const difficulty = data.miningCost.difficulty;
-		setCountUpHtml('#statsDifficulty', '<p title="Average hashes needed to find a block: ' + difficulty.toLocaleString('en-US') + '">' + (difficulty / 1e12).toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 }) + ' T</p>');
-		setCountUpHtml('#statsHashRate', '<p>' + formatHashRateString(data.miningCost.hashRate) + '</p>');
-
-		$('#statsHolder').show();
-    });
 }
