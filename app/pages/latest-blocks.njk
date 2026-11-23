@@ -20,14 +20,6 @@
 			<div class="blocks-toolbar">
 				{% include "partials/pagination.njk" %}
 
-				<div class="lithos-toggle">
-					<div class="form-check form-check-reverse checkbox-xl p-0 m-0">
-						<input style="margin-right:0px;" class="form-check-input" onchange="onToggleLithosOnly()" type="checkbox" id="toggleLithos">
-						<label style="padding:0;margin-right:15px;" class="form-check-label" for="toggleLithos" title="Only blocks mined through the Lithos pool">
-							Lithos only:
-						</label>
-					</div>
-				</div>
 			</div>
 	
 			<div class="row w-100">
@@ -60,29 +52,6 @@
 	{% include "partials/loading.njk" %}
 
 	<style>
-		/* The Lithos toggle sits at the right end of the top pager's row */
-		.blocks-toolbar {
-			position: relative;
-		}
-
-		.blocks-toolbar .lithos-toggle {
-			position: absolute;
-			top: 0;
-			right: 0;
-			height: 38px;
-			display: flex;
-			align-items: center;
-		}
-
-		@media (max-width: 767.98px) {
-			.blocks-toolbar .lithos-toggle {
-				position: static;
-				height: auto;
-				justify-content: flex-end;
-				margin: 0 12px 0.75rem 0;
-			}
-		}
-
 		/* A block that came in while the page was open flashes once */
 		#transactionsTableBody tr.block-new > td {
 			animation: block-new 3s ease-out;
@@ -103,6 +72,5 @@
 {% block scripts %}
 	<script src="./scripts/common/prices.js?v=44"></script>
 	<script src="./scripts/common/pagination.js?v=41"></script>
-	<script src="./scripts/common/lithos.js?v=1"></script>
-	<script src="./scripts/latest-blocks.js?v=48"></script>
+	<script src="./scripts/latest-blocks.js?v=51"></script>
 {% endblock %}
