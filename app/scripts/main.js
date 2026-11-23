@@ -828,7 +828,8 @@ function initNodeBadge() {
 	const url = LiteNode.getUrl();
 
 	if (!url) {
-		$('.nodeBadgeText').text('Pick a node');
+		$('.node-badge').addClass('node-none');
+		$('.nodeBadgeText').text('Choose node');
 		return;
 	}
 
