@@ -2,21 +2,18 @@ import { ORACLE_POOL_V1_TEMPLATES, ORACLE_POOL_V2_TEMPLATES } from '../addresses
 
 export { ORACLE_POOLS } from './pools.js?v=4';
 
-// Everything here is read from indexed nodes through our gateway (see api-client.js): pool, refresh,
-// datapoint and buyback boxes by token id, refresh txs by the pool's address, balances, and block
-// headers for timestamps. The explorer API is not needed: the node formats carry every register.
-const GATEWAY = 'https://chain.mewfinance.com/';
-const FETCH_TIMEOUT_MS = 20000;
+// Everything here is read from the selected node (LiteNode): pool, refresh, datapoint and buyback
+// boxes by token id, refresh txs by the pool's address, balances, and block headers for timestamps.
+// Node answers carry every register.
 // node.ergopool.io answers 403 ("forbidden by administrative rules") to any box or tx page over 100,
-// and the gateway passes that on instead of asking another node, so no request asks for more.
+// so no request asks for more.
 const MAX_PAGE = 100;
 const RETRIES = 2;
 const RETRY_DELAY_MS = 700;
 // Answers reused for this long, so the page's parallel calls share the pool box and refresh txs
 const CACHE_MS = 30000;
-const PARALLEL_REQUESTS = 6;
-// The gateway answers over HTTP/2 and asks two nodes per balance, so balances go wider
-const BALANCE_REQUESTS = 10;
+const PARALLEL_REQUESTS = 4;
+const BALANCE_REQUESTS = 4;
 // Datapoints posted within this many blocks of the newest get exact times (see datapointTimes)
 const EXACT_TIME_BLOCKS = 720;
 // An oracle counts as live while its datapoint box is at most this many epochs behind the pool box
@@ -43,38 +40,21 @@ function sleep(ms) {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function request(path, init) {
+async function request(path) {
 	for (let attempt = 0; ; attempt++) {
-		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-		let response;
-		let body;
-
 		try {
-			response = await fetch(GATEWAY + path, Object.assign({}, init, { signal: controller.signal }));
-			body = await response.text();
+			return await LiteNode.get(path);
 		} catch (error) {
-			if (attempt < RETRIES) {
+			const retryable = error.kind === 'unreachable' || error.kind === 'timeout'
+				|| (error.kind === 'http' && (error.status === 403 || error.status === 429 || error.status >= 500));
+
+			if (retryable && attempt < RETRIES) {
 				await sleep(RETRY_DELAY_MS);
 				continue;
 			}
-			throw new Error('Oracle data request failed: ' + path + ' (' + error.message + ')');
-		} finally {
-			clearTimeout(timer);
+
+			throw error;
 		}
-
-		if (response.ok) return JSON.parse(body);
-
-		const retryable = response.status === 403 || response.status === 429 || (response.status >= 500 && !body.includes('disagree'));
-		if (retryable && attempt < RETRIES) {
-			await sleep(RETRY_DELAY_MS);
-			continue;
-		}
-
-		const error = new Error('Oracle data request failed: ' + path + ' (HTTP ' + response.status + ')');
-		error.status = response.status;
-		error.body = body;
-		throw error;
 	}
 }
 
@@ -91,11 +71,6 @@ function cached(key, load) {
 
 function get(path) {
 	return cached('GET ' + path, () => request(path));
-}
-
-// text/plain keeps the POST a simple request: no CORS preflight
-function post(path, text) {
-	return cached('POST ' + path + ' ' + text, () => request(path, { method: 'POST', body: text, headers: { 'Content-Type': 'text/plain' } }));
 }
 
 /** Run `work` over `items`, `limit` at a time, keeping the order */
@@ -121,9 +96,10 @@ function uniqueBoxes(boxes) {
 	return boxes.filter(box => !seen.has(box.boxId) && seen.add(box.boxId));
 }
 
-/** Rows as the index lists them (a box may repeat; page by the row count) */
-function unspentByToken(tokenId, offset = 0, limit = BOX_PAGE) {
-	return get('blockchain/box/unspent/byTokenId/' + tokenId + '?offset=' + offset + '&limit=' + limit);
+/** Rows as the index lists them (a box may repeat; page by the row count). Nodes answer { items, total } or a plain list */
+async function unspentByToken(tokenId, offset = 0, limit = BOX_PAGE) {
+	const page = await get('blockchain/box/unspent/byTokenId/' + tokenId + '?offset=' + offset + '&limit=' + limit);
+	return Array.isArray(page) ? page : ((page && page.items) || []);
 }
 
 /** Every box that held the token, newest first: { items, total } (total counts the index's rows) */
@@ -134,7 +110,7 @@ async function boxesByToken(tokenId, offset, limit) {
 
 /** Transactions touching the address, newest first, with full input and output boxes: { items, total } */
 function txsByAddress(address, offset, limit) {
-	return post('blockchain/transaction/byAddress?offset=' + offset + '&limit=' + limit, address);
+	return get('blockchain/transaction/byAddress/' + address + '?offset=' + offset + '&limit=' + limit);
 }
 
 function txById(txId) {
@@ -146,7 +122,7 @@ function boxById(boxId) {
 }
 
 async function tipHeader() {
-	const headers = await request('blocks/lastHeaders/1');
+	const headers = await LiteNode.lastHeaders(1);
 	return headers[0];
 }
 
@@ -239,7 +215,7 @@ function displayRate(pool, raw) {
 
 function tokenAmount(box, tokenId) {
 	const token = (box.assets || []).find(asset => asset.tokenId === tokenId);
-	return token ? token.amount : 0;
+	return token ? Number(token.amount.toString()) : 0;
 }
 
 // ---- Pool box ----
@@ -303,15 +279,10 @@ async function datapointBoxes(pool) {
 	return uniqueBoxes(boxes).filter(box => hasTemplate(box.ergoTree, templates));
 }
 
-/** nanoErg, or null when the indexed nodes disagree on it (the gateway answers 502 then) */
+/** nanoErg */
 async function ergBalance(address) {
-	try {
-		const balance = await post('blockchain/balance', address);
-		return balance.confirmed.nanoErgs;
-	} catch (error) {
-		if (error.status === 502 && String(error.body).includes('indexed_nodes_disagree_on_this_balance')) return null;
-		throw error;
-	}
+	const balance = await get('blockchain/balanceForAddress/' + address);
+	return Number(balance.confirmed.nanoErgs.toString());
 }
 
 /** v1: the current live epoch box and the one the latest collection spent, by box id */
@@ -325,7 +296,7 @@ async function v1RecentEpochs(pool) {
  * A datapoint box test for "live": the box was made within LIVE_EPOCHS epochs of blocks before the
  * current pool box. Heights rather than an exact epoch match, because an oracle can miss one refresh
  * (posted a block late, or collected by the last refresh and not yet posted again) and still be
- * running, and because the gateway may read the pool box and the datapoints from nodes a block apart.
+ * running.
  */
 async function liveTest(pool) {
 	const poolBox = await currentPoolBox(pool);
@@ -461,7 +432,7 @@ export async function fetchOperators(pool, history = null) {
 
 /**
  * ERG balances of `addresses`, BALANCE_REQUESTS at a time. onBalance(address, nanoErg) runs as each
- * one comes in; nanoErg is null when the indexed nodes disagree or the request fails.
+ * one comes in; nanoErg is null when the request fails.
  */
 export async function fetchErgBalances(addresses, onBalance) {
 	await mapLimited(addresses, async address => {
@@ -527,7 +498,7 @@ function refreshItem(pool, tx, poolOutput, epoch, collector) {
 
 /**
  * Refreshes, newest first. epoch is the epoch collected (v2: its counter; v1: its end height),
- * collector the address that collected it. total counts what the gateway's address index holds
+ * collector the address that collected it. total counts what the node's address index holds
  * (v1: about half the epoch preparation address's txs; its index there starts at height ~1460000).
  * limit: at most 49 (v1) or 100 (v2), see MAX_PAGE.
  */

@@ -1,4 +1,4 @@
-import { ORACLE_POOLS, fetchPoolBoxId, fetchPoolState, fetchOracleCounts, fetchOperators, fetchErgBalances, fetchRefreshHistory, fetchRateHistory } from './oracles/oracle-data.js?v=9';
+import { ORACLE_POOLS, fetchPoolBoxId, fetchPoolState, fetchOracleCounts, fetchOperators, fetchErgBalances, fetchRefreshHistory, fetchRateHistory } from './oracles/oracle-data.js?v=10';
 
 // Oracle pools: oracles lists them, oracles#pool=<slug> shows one. The pool goes in the hash, which
 // params.js reads on every host, so the page needs no server rewrite.
@@ -27,9 +27,6 @@ let operatorBalances = {};
 let chart = null;
 let chartDays = 7;
 let rateHistory = {};
-// ERG's market price in USD, hourly over 7 days and daily over 30 (api2, as on the token page)
-let marketHistory = null;
-let marketHistoryRequest = null;
 
 ITEMS_PER_PAGE = HISTORY_PAGE_SIZE;
 
@@ -44,11 +41,6 @@ $(function() {
 	});
 
 	watchScrollFade(document.getElementById('operatorsScroll'));
-
-	// The market price and the rate card's comparison wait for prices; the page doesn't
-	getPrices(() => {
-		if (pool && poolState) printMarket();
-	});
 
 	setInterval(updateTimes, TIME_TICK_MS);
 	setInterval(checkForRefresh, POLL_MS);
@@ -273,25 +265,7 @@ function printPoolState() {
 	$('#stat-epoch').text(formatHeight(poolState.epoch));
 	$('#stat-box').html(`<a href="${getBoxUrl(poolState.boxId)}">Pool box</a> &middot; <a href="${getTransactionsUrl(poolState.txId)}">Transaction</a>`);
 
-	printMarket();
-}
-
-// The rate against ERG's market price, for the pools quoted in USD
-function printMarket() {
-	if (!isUsdPool(pool)) {
-		$('#stat-market').text('Datapoint ' + poolState.rawDatapoint);
-		return;
-	}
-
-	const market = prices['ERG'];
-
-	if (!market) {
-		$('#stat-market').text('Market -');
-		return;
-	}
-
-	const difference = (poolState.rate / market - 1) * 100;
-	$('#stat-market').text('Market $' + nFormatter(market, 4) + ' · ' + (difference > 0 ? '+' : '') + difference.toFixed(2) + '%');
+	$('#stat-market').text('Datapoint ' + poolState.rawDatapoint);
 }
 
 // quiet: a refresh of a table already showing; if it fails the table keeps what it has
@@ -441,46 +415,20 @@ function showChart() {
 		$('#chartLoading').show();
 	}
 
-	Promise.all([
-		rateHistory[days] || fetchRateHistory(item, days),
-		isUsdPool(item) ? getMarketHistory() : null
-	]).then(([points, market]) => {
+	Promise.resolve(rateHistory[days] || fetchRateHistory(item, days)).then((points) => {
 		if (pool !== item) return;
 
 		rateHistory[days] = points;
-		if (days == chartDays) drawChart(points, market ? market[days == 7 ? 1 : 2] : null);
+		if (days == chartDays) drawChart(points);
 	}).catch((error) => {
 		if (pool !== item) return;
 
-		console.error('Error fetching the rate history:', error);
-		drawChart([], null);
+		console.warn('Error fetching the rate history:', error);
+		drawChart([]);
 	});
 }
 
-function getMarketHistory() {
-	if (marketHistory) return Promise.resolve(marketHistory);
-
-	if (marketHistoryRequest == null) {
-		marketHistoryRequest = new Promise((resolve) => {
-			$.post('https://api2.ergexplorer.com/tokens/getPriceHistoryNew',
-				{ from: Date.now() - 30 * 24 * 60 * 60 * 1000, ids: ['ERG'] },
-				(data) => {
-					marketHistory = Array.isArray(data) && data.length >= 3 ? data : null;
-					resolve(marketHistory);
-				}
-			).fail((error) => {
-				// The chart still shows the oracle's rate alone
-				console.warn('No ERG price history:', error);
-				marketHistoryRequest = null;
-				resolve(null);
-			});
-		});
-	}
-
-	return marketHistoryRequest;
-}
-
-function drawChart(points, market) {
+function drawChart(points) {
 	if (chart) {
 		chart.destroy();
 		chart = null;
@@ -489,7 +437,6 @@ function drawChart(points, market) {
 	$('#chartLoading').hide();
 	$('#chartError').toggle(points.length == 0);
 	$('#chart').toggle(points.length > 0);
-	$('#chartTitle').text(market ? 'Rate vs market' : 'Rate chart');
 
 	if (points.length == 0 || typeof Chart === 'undefined') return;
 
@@ -497,8 +444,6 @@ function drawChart(points, market) {
 
 	const rootStyles = getComputedStyle(document.documentElement);
 	const primaryColor = rootStyles.getPropertyValue('--main-color').trim();
-	const mutedColor = rootStyles.getPropertyValue('--text-light').trim();
-	const marketPoints = market ? market.map((row) => ({ time: parseDate(row.timestamp).getTime(), price: Number(row.price) })) : null;
 
 	const datasets = [{
 		label: 'Oracle',
@@ -506,15 +451,6 @@ function drawChart(points, market) {
 		borderColor: primaryColor,
 		backgroundColor: primaryColor
 	}];
-
-	if (marketPoints && marketPoints.length > 0) {
-		datasets.push({
-			label: 'Market',
-			data: points.map((p) => marketPriceAt(marketPoints, p.time)),
-			borderColor: mutedColor,
-			backgroundColor: mutedColor
-		});
-	}
 
 	chart = new Chart(document.getElementById('chart'), {
 		type: 'line',
@@ -558,18 +494,6 @@ function thinPoints(points) {
 	return thinned;
 }
 
-// The last market price at or before the time, else the first one
-function marketPriceAt(marketPoints, time) {
-	let price = marketPoints[0].price;
-
-	for (const point of marketPoints) {
-		if (point.time > time) break;
-		price = point.price;
-	}
-
-	return price;
-}
-
 /* Technical */
 
 // The tokens, then the contract and its settings, split evenly over the two columns. The pool box's
@@ -610,10 +534,6 @@ function skeletonRows(columns) {
 }
 
 /* Formatting */
-
-function isUsdPool(item) {
-	return item.unit == 'USD';
-}
 
 // v1 names an epoch by the height it ends at, v2 counts them
 function epochLabel(item) {
