@@ -63,7 +63,7 @@ function initFooterHeart() {
 //once a day a popup asks for a donation. "Don't show again" holds until funding
 //recovers, so the next shortfall asks again. The USD value is cached for half an hour.
 function checkFunding() {
-	if (networkType == 'testnet') {
+	if (networkType == 'testnet' || !LiteNode.getUrl()) {
 		return;
 	}
 
@@ -772,7 +772,7 @@ function getAssetTitleParams(token, tokenId, name, iconIsToTheLeft, scam = false
 	let displayName = (name == '' || name == null) ? formatAddressString(tokenId, 15) : name;
 	let dataName = ('' + displayName).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-	return '<a title="' + (scam ? 'Reported as suspicious by users.' : '') + '" class="token-link' + (splitName ? ' token-link-split' : '') + (scam ? ' text-danger' : '') + '" href="' + getTokenUrl(tokenId) + '" data-token-id="' + tokenId + '" data-token-name="' + dataName + '"' + (scam ? ' data-token-scam="1"' : '') + '>' + (iconIsToTheLeft ? iconHtml + ' ' : '') + (splitName ? getTokenNameSplitHtml('' + displayName) : displayName) + (iconIsToTheLeft ? '' : ' ' + iconHtml) + '</a>';
+	return '<a title="' + (scam ? 'Reported as suspicious by users.' : '') + '" class="token-link' + (splitName ? ' token-link-split' : '') + (scam ? ' text-danger' : '') + '" href="' + getTokenUrl(tokenId) + '" data-token-id="' + tokenId + '" data-token-name="' + dataName + '"' + (scam ? ' data-token-scam="1"' : '') + '>' + (iconIsToTheLeft ? iconHtml + ' ' : '') + (splitName ? getTokenNameSplitHtml('' + displayName) : dataName) + (iconIsToTheLeft ? '' : ' ' + iconHtml) + '</a>';
 }
 
 //A raw amount past 2^53 (10M of a 9-decimal token) is divided exactly. What it comes to is a number
@@ -1040,7 +1040,7 @@ function formatBox(box, trueBox = false, unspent = false, change = false, tokenM
 	}
 
 	if (settlementHeight) {
-		meta.push('<strong>Height</strong> <a href="' + getBlockUrl(settlementBlockId) + '">' + nFormatter(settlementHeight, 0, true, true) + '</a>');
+		meta.push('<strong>Height</strong> <a href="' + getBlockUrl(settlementBlockId || settlementHeight) + '">' + nFormatter(settlementHeight, 0, true, true) + '</a>');
 	}
 
 	if (meta.length > 0) {
@@ -1788,16 +1788,6 @@ function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-async function checkLinkExists(url) {
-    try {
-        const response = await fetch(url, { method: 'HEAD' }); // lite-allow-media: HEAD of an NFT media link
-        return response.ok; // `true` if the status code is 2xx or 3xx
-    } catch (error) {
-        console.error('Error checking link:', error);
-        return false; // If there's an error, assume the link does not exist
-    }
 }
 
 function hexToBytes(hex) {

@@ -4,11 +4,11 @@
 //https://gateway.pinata.cloud
 const NFT_LINK_MAX_LENGTH = 40;
 const IPFS_PROVIDER_HOSTS = [
+	'https://gateway.lighthouse.storage',
 	'https://nftstorage.link',
-	'https://gateway.pinata.cloud',
-	'https://gateway.lighthouse.storage'
+	'https://gateway.pinata.cloud'
 ];
-const IPFS_PROVIDER_HOST = 'https://nftstorage.link';
+const IPFS_PROVIDER_HOST = 'https://gateway.lighthouse.storage';
 const NFT_TYPE = {
 	Image: 'Image',
 	Audio: 'Audio',
@@ -79,11 +79,12 @@ function getNftsInfo(tokenIds, callback, onlyNft = true) {
 }
 
 // No answer at all (null, null) means the token isn't there
-function getNftInfo(tokenId, callback) {
+// With onlyNft false, any token comes back with what its minting box says
+function getNftInfo(tokenId, callback, onlyNft = true) {
 	LiteNode.tokenWithIssuingBox(tokenId).then(function(data) {
 		let nft = processNftData(data);
 
-		callback(nft && nft.isNft ? nft : null, null);
+		callback(nft && (nft.isNft || !onlyNft) ? nft : null, null);
 	}, function(e) {
 		callback(null, e.kind === 'notfound' ? null : 'Failed to fetch NFT data.');
 	});
@@ -92,12 +93,14 @@ function getNftInfo(tokenId, callback) {
 // NFTs this address minted: there is no index of issuers, so look through its most recent
 // transactions for mints it funded (a new token takes the id of its tx's first input)
 const ISSUED_NFT_SCAN_TXS = 500;
+// Pages of 100 old txs can take a slow node 20 s or more
+const ISSUED_NFT_SCAN_TIMEOUT_MS = 60000;
 
 async function findIssuedTokenIds(address) {
 	const ids = [];
 
 	for (let offset = 0; offset < ISSUED_NFT_SCAN_TXS; offset += 100) {
-		const page = await LiteNode.get('blockchain/transaction/byAddress/' + address + '?offset=' + offset + '&limit=100');
+		const page = await LiteNode.get('blockchain/transaction/byAddress/' + address + '?offset=' + offset + '&limit=100', { timeout: ISSUED_NFT_SCAN_TIMEOUT_MS });
 		const items = (page && page.items) || [];
 
 		for (const tx of items) {
@@ -120,11 +123,11 @@ async function findIssuedTokenIds(address) {
 	return ids;
 }
 
-function getIssuedNfts(address, callback) {
+function getIssuedNfts(address, callback, onlyNft = true) {
 	findIssuedTokenIds(address).then(function(ids) {
 		if (ids.length == 0) return;
 
-		getNftsInfo(ids.reverse(), callback, true);
+		getNftsInfo(ids.reverse(), callback, onlyNft);
 	}, function() {
 		callback(null, 'Failed to fetch NFT data.');
 	});

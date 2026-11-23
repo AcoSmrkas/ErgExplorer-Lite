@@ -62,12 +62,12 @@ for (const rel of walk(root)) {
 	const text = fs.readFileSync(path.join(root, rel), 'utf8');
 
 	if (rel.endsWith('.js')) {
-		const code = stripComments(text.replace(/\/\/ lite-allow-media.*$/gm, ''));
+		const code = stripComments(text.replace(/\/\/ lite-allow:.*$/gm, ''));
 		const lines = code.split('\n');
 
 		lines.forEach((line, i) => {
-			// NFT media (images, audio, video) may come from anywhere; such a line says so with this marker
-			if (text.split('\n')[i] && text.split('\n')[i].includes('lite-allow-media')) return;
+			// A line that must name another host on purpose says why after a // lite-allow: marker
+			if (text.split('\n')[i] && text.split('\n')[i].includes('// lite-allow:')) return;
 
 			if (rel !== NODE_LAYER) {
 				for (const pattern of NETWORK_CALLS) {

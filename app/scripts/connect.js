@@ -1,7 +1,7 @@
 // The connect page: test a node, save it, and go back to where the visitor was headed
 
 // Offered as one-click choices, never picked for the visitor
-const SUGGESTED_NODES = ['https://node-p2p.ergoplatform.com'];
+const SUGGESTED_NODES = ['https://node-p2p.ergoplatform.com']; // lite-allow: a node the visitor can pick, not a data source
 $(function() {
 	setDocumentTitle('Pick your node');
 
