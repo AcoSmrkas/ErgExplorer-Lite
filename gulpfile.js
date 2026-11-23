@@ -7,6 +7,13 @@ const sass = require("gulp-sass")(require('sass'));
 const $ = gulpLoadPlugins();
 const reload = browserSync.reload;
 
+//Fails the build if anything but scripts/common/node.js fetches data, or a page loads code from another host
+function checkNoForeignFetch(done) {
+	const result = require('child_process').spawnSync(process.execPath, ['tools/check-no-foreign-fetch.js'], {stdio: 'inherit'});
+
+	done(result.status === 0 ? undefined : new Error('Foreign data sources found'));
+}
+
 function clean() {
 	return Promise.all([
 		fs.rm('.tmp', {force: true, recursive: true}),
@@ -155,4 +162,5 @@ exports.scriptsbuild = scriptsbuild;
 
 exports.serve = gulp.series(clean, nunjucks, styles, stylescss, scripts, fonts, doserve);
 exports.vendor = vendor;
-exports.build = gulp.series(clean, nunjucks, styles, stylescss, scripts, html, images, fonts, stylescss, scriptsbuild, vendor, extras, stamp);
+exports.check = checkNoForeignFetch;
+exports.build = gulp.series(checkNoForeignFetch, clean, nunjucks, styles, stylescss, scripts, html, images, fonts, stylescss, scriptsbuild, vendor, extras, stamp);
