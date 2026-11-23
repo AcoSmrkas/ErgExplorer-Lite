@@ -17,7 +17,7 @@ function clean() {
 function doserve() {
     browserSync.init({
       notify: false,
-      port: 9004,
+      port: Number(process.env.PORT) || 9014,
       server: {
         baseDir: ['.tmp', 'app'],
 		serveStaticOptions: {
@@ -95,6 +95,12 @@ function images() {
     	.pipe(gulp.dest('dist/images'));
 }
 
+//Third-party libraries, served from here so pages load nothing from other hosts
+function vendor() {
+	return gulp.src('app/vendor/**/*', {encoding: false})
+		.pipe(gulp.dest('dist/vendor'));
+}
+
 function fonts() {
 	return gulp.src('app/fonts/*', {encoding: false})
     	.pipe(gulp.dest('dist/fonts'));
@@ -148,4 +154,5 @@ exports.extras = extras;
 exports.scriptsbuild = scriptsbuild;
 
 exports.serve = gulp.series(clean, nunjucks, styles, stylescss, scripts, fonts, doserve);
-exports.build = gulp.series(clean, nunjucks, styles, stylescss, scripts, html, images, fonts, stylescss, scriptsbuild, extras, stamp);
+exports.vendor = vendor;
+exports.build = gulp.series(clean, nunjucks, styles, stylescss, scripts, html, images, fonts, stylescss, scriptsbuild, vendor, extras, stamp);

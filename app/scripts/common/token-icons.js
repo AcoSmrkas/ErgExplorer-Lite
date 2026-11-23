@@ -1,23 +1,16 @@
-//Token icons come from the database (tokens.iconurl), loaded by getTokenIcons(). Pages that render
-//icons before it has answered get iconurl from tokens/byId instead (the token page and the token popup).
+//Lite has no icon database: a token has an icon only if its thumbnail ships in images/tokens/thumbs
+//(listed in token-thumb-ids.js). getTokenIcons() stays so pages can keep calling it.
+var tokenIconsDb = {};
+var gotTokenIcons = true;
 
-var tokenIconsDb = [];
-var gotTokenIcons = false;
+for (const id of (typeof TOKEN_THUMB_IDS !== 'undefined' ? TOKEN_THUMB_IDS : [])) {
+	tokenIconsDb[id] = '/images/tokens/thumbs/' + id + '.webp';
+}
 
 function getTokenIcons(callback) {
-	$.get('https://api2.ergexplorer.com/tokens/getTokenIcons',
-		function (data) {
-			tokenIconsDb = data.items.reduce((acc, item) => {
-				acc[item.id] = item.iconurl;
-				return acc;
-			  }, {});
-			gotTokenIcons = true;
-		}
-	).always(function (data) {
-		if (callback) {
-			callback();
-		}
-	})
+	if (callback) {
+		callback();
+	}
 }
 
 function hasIcon(tokenId) {

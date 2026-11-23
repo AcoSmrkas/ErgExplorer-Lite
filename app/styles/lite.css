@@ -1,0 +1,109 @@
+/* ErgExplorer Lite additions: the Lite tag, the node badge and the connect page */
+
+.lite-tag {
+	display: inline-block;
+	margin-left: 6px;
+	padding: 1px 6px;
+	border: 1px solid var(--main-color);
+	border-radius: 4px;
+	color: var(--main-color);
+	font-size: 0.7rem;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	vertical-align: middle;
+}
+
+.node-badge {
+	display: inline-flex !important;
+	align-items: center;
+	gap: 6px;
+	max-width: 220px;
+	white-space: nowrap;
+}
+
+.node-badge .nodeBadgeText {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.node-dot {
+	flex: none;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: #888;
+}
+
+.node-ok .node-dot { background: #3fb950; }
+.node-lagging .node-dot { background: #d29922; }
+.node-down .node-dot { background: #f85149; }
+
+.connect-card {
+	padding: 24px 20px;
+}
+
+.connect-form {
+	display: flex;
+	gap: 8px;
+	margin: 16px 0 12px;
+}
+
+.connect-form input {
+	flex: 1;
+	min-width: 0;
+}
+
+.connect-status {
+	margin-bottom: 16px;
+	padding: 10px 12px;
+	border-radius: 6px;
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	overflow-wrap: anywhere;
+}
+
+.connect-ok { border-color: #3fb950; }
+.connect-error { border-color: #f85149; }
+
+.saved-nodes {
+	margin: 8px 0 16px;
+}
+
+.saved-node {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 6px 0;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+	overflow-wrap: anywhere;
+}
+
+.saved-node-current a {
+	font-weight: 600;
+}
+
+.saved-node-remove {
+	flex: none;
+	color: inherit;
+}
+
+.connect-help summary {
+	cursor: pointer;
+	color: var(--main-color);
+}
+
+.connect-help ul {
+	margin-top: 8px;
+	padding-left: 20px;
+}
+
+@media (max-width: 575px) {
+	.connect-form {
+		flex-direction: column;
+	}
+
+	.node-badge {
+		max-width: none;
+	}
+}

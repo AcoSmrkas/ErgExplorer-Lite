@@ -28,97 +28,106 @@ class NftInfo {
 	}
 }
 
+// NFT data straight from the node: each token's metadata plus its minting box, whose R7-R9 say
+// what kind of NFT it is and where its media lives. onlyNft drops tokens without an NFT type.
+const NFT_LOOKUP_PARALLEL = 6;
+
+async function loadNftData(tokenIds) {
+	const results = new Array(tokenIds.length);
+	let next = 0;
+
+	const worker = async () => {
+		while (next < tokenIds.length) {
+			const i = next++;
+
+			try {
+				results[i] = await LiteNode.tokenWithIssuingBox(tokenIds[i]);
+			} catch (e) {
+				results[i] = e.kind === 'notfound' ? null : e;
+			}
+		}
+	};
+
+	await Promise.all(Array.from({ length: Math.min(NFT_LOOKUP_PARALLEL, tokenIds.length) }, worker));
+
+	return results;
+}
+
 function getNftsInfo(tokenIds, callback, onlyNft = true) {
-	var jqxhr = $.post(ERGEXPLORER_API_HOST + 'tokens/byId',
-		{
-			onlyNft: onlyNft,
-			ids: tokenIds
-		}, function(data) {
-			let nfts = [];
-
-			if (data.total > 0) {
-				let items = data.items;
-
-				for (let i = items.length - 1; i >= 0; i--) {
-					nfts.push(processNftData(data.items[i]));
-				}
-
-				callback(nfts, null);
-			}
-		})
-		.fail(function() {
+	loadNftData(tokenIds).then(function(items) {
+		if (items.length > 0 && items.every(item => item instanceof Error)) {
 			callback(null, 'Failed to fetch NFTs data.');
-		});
-}
+			return;
+		}
 
-// A 404 means the token isn't there; anything else means the request failed.
-function nftLoadFailMessage(xhr) {
-	return xhr && xhr.status == 404 ? null : 'Failed to fetch NFT data.';
-}
+		let nfts = [];
 
-function getNftInfo(tokenId, callback) {
-	if (networkType != 'testnet') {
-		var jqxhr = $.post(ERGEXPLORER_API_HOST + 'tokens/byId',
-			{
-				onlyNft: true,
-				ids: [tokenId]
-			}, function(data) {
-			let nft = null;
+		for (let i = items.length - 1; i >= 0; i--) {
+			if (!items[i] || items[i] instanceof Error) continue;
 
-			if (data.total > 0) {
-				nft = processNftData(data.items[0]);
+			let nft = processNftData(items[i]);
+
+			if (!onlyNft || nft.isNft) {
+				nfts.push(nft);
 			}
-			
-			callback(nft, null);
-	    })
-	    .fail(function(xhr) {
-	    	callback(null, nftLoadFailMessage(xhr));
-	    });
-	} else {
-		$.get(API_HOST + 'api/v1/tokens/' + tokenId, function(data) {
-			let tokenData = data;
-			$.get(API_HOST + 'api/v1/boxes/byTokenId/' + tokenId, function(data) {
-				let nftData = data;
+		}
 
-				Object.assign(tokenData, nftData.items[0]);
+		if (nfts.length > 0) {
+			callback(nfts, null);
+		}
+	});
+}
 
-				let nft = null;
+// No answer at all (null, null) means the token isn't there
+function getNftInfo(tokenId, callback) {
+	LiteNode.tokenWithIssuingBox(tokenId).then(function(data) {
+		let nft = processNftData(data);
 
-				nft = processNftData(tokenData);
+		callback(nft && nft.isNft ? nft : null, null);
+	}, function(e) {
+		callback(null, e.kind === 'notfound' ? null : 'Failed to fetch NFT data.');
+	});
+}
 
-				callback(nft, null);
-		    })
-		    .fail(function(xhr) {
-		    	callback(null, nftLoadFailMessage(xhr));
-		    });	
-	    })
-	    .fail(function(xhr) {
-	    	callback(null, nftLoadFailMessage(xhr));
-	    });
+// NFTs this address minted: there is no index of issuers, so look through its most recent
+// transactions for mints it funded (a new token takes the id of its tx's first input)
+const ISSUED_NFT_SCAN_TXS = 500;
+
+async function findIssuedTokenIds(address) {
+	const ids = [];
+
+	for (let offset = 0; offset < ISSUED_NFT_SCAN_TXS; offset += 100) {
+		const page = await LiteNode.get('blockchain/transaction/byAddress/' + address + '?offset=' + offset + '&limit=100');
+		const items = (page && page.items) || [];
+
+		for (const tx of items) {
+			const first = tx.inputs && tx.inputs[0];
+
+			if (!first || getBoxAddress(first) != address) continue;
+
+			for (const output of tx.outputs || []) {
+				for (const asset of output.assets || []) {
+					if (asset.tokenId == first.boxId && !ids.includes(asset.tokenId)) {
+						ids.push(asset.tokenId);
+					}
+				}
+			}
+		}
+
+		if (items.length < 100) break;
 	}
+
+	return ids;
 }
 
 function getIssuedNfts(address, callback) {
-	var jqxhr = $.get(ERGEXPLORER_API_HOST + 'tokens/byIssuedAddress',
-		{
-			onlyNft: true,
-			address: address
-		}, function(data) {
-		let nfts = [];
+	findIssuedTokenIds(address).then(function(ids) {
+		if (ids.length == 0) return;
 
-		if (data.total > 0) {
-			let items = data.items;
-
-			for (let i = items.length - 1; i >= 0; i--) {
-				nfts.push(processNftData(data.items[i]));
-			}
-
-			callback(nfts, null);
-		}
-    })
-    .fail(function() {
-    	callback(null, 'Failed to fetch NFT data.');
-    });
+		getNftsInfo(ids.reverse(), callback, true);
+	}, function() {
+		callback(null, 'Failed to fetch NFT data.');
+	});
 }
 
 function processNftData(nftData) {
@@ -161,10 +170,6 @@ function processNftData(nftData) {
 
 	if (nftData.cachedurl) {
 		nft.cachedurl = nftData.cachedurl;
-	}
-
-	if (nftData.name == 'Mew Fun Lottery Ticket') {
-		nft.cachedurl = 'https://api.ergexplorer.com/nftcache/bafybeie6z4zm7ahjvlawjfq4idojdrahklksygpfmb4zvlrx3id3h5dyty.png';
 	}
 
 	return nft;

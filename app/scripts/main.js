@@ -5,6 +5,7 @@ var addressbook = new Array();
 var shownNotificationPermissionToast = false;
 
 setupMainnetTestnet();
+requireNode();
 
 $.ajaxSetup({
     cache: false
@@ -15,13 +16,7 @@ $(function() {
 
 	setOfficialLink();
 
-	if (IS_DEV_ENVIRONMENT) {
-		// ERGEXPLORER_API_HOST = 'https://localhost/ergexplorer-api/'
-	}
-
-	if (window.location.host == 'dev.ergexplorer.com') {
-		ERGEXPLORER_API_HOST = 'https://devapi.ergexplorer.com/';
-	}
+	initNodeBadge();
 
 	    // Function to toggle between two divs
     function toggleDivs() {
@@ -83,19 +78,16 @@ function checkFunding() {
 		return;
 	}
 
-	$.when(
-		$.get(API_HOST + 'addresses/' + DONATION_ADDRESS + '/balance/confirmed'),
-		$.get(ERGEXPLORER_API_HOST + 'tokens/getErgPrice')
-	).done(function(balance, price) {
-		const usd = balance[0].nanoErgs / Math.pow(10, ERG_DECIMALS) * parseFloat(price[0].items[0].value);
+	Promise.all([LiteNode.addressBalance(DONATION_ADDRESS), LiteNode.ergUsd()]).then(function([balance, ergUsd]) {
+		const usd = Number(balance.confirmed.nanoErgs) / Math.pow(10, ERG_DECIMALS) * ergUsd;
 
-		if (isNaN(usd)) {
+		if (!isFinite(usd)) {
 			return;
 		}
 
 		localStorage.setItem('fundingUsd', JSON.stringify({ usd: usd, timestamp: Date.now() }));
 		showFundingStatus(usd);
-	});
+	}).catch(function() {});
 }
 
 function showFundingStatus(usd) {
@@ -191,7 +183,7 @@ window.addEventListener('hashchange', () => {
 );
 
 function setDocumentTitle(text) {
-	document.title = 'Erg Explorer - ' + text;
+	document.title = 'Erg Explorer Lite - ' + text;
 }
 
 function setErgLogoImageColor(elementId, width) {
@@ -293,25 +285,6 @@ function goToTokenUrl(tokenId) {
     window.location.assign(getSearchQueryPage('token', tokenId));
 }
 
-function getIssuedTokensSearchUrl(query) {
-	if (query.trim() == '') {
-		delete(params['query']);
-	} else {
-		params['query'] = query.replace(/#/g, '%23');
-	}
-
-	delete(params['offset']);
-	delete(params['limit']);
-
-	let url = getUrlWithParams('issued-tokens', false);
-
-	return url;
-}
-
-function goToIssuedTokensSearch(query) {
-	window.location.assign(getIssuedTokensSearchUrl(query));
-}
-
 //Search box
 function submitSearch(key) {
 	if (key.keyCode != 13) return;
@@ -354,11 +327,7 @@ async function searchAddress() {
 			goToTransactionUrl(searchQuery);
 			break;
 		case '2':
-			if (searchQuery.length == 64) {
-				goToTokenUrl(searchQuery);
-			} else {
-				goToIssuedTokensSearch(searchQuery);
-			}
+			goToTokenUrl(searchQuery);
 			break;
 		case '3':
 			goToBlockUrl(searchQuery);
@@ -367,50 +336,47 @@ async function searchAddress() {
 			goToBoxUrl(searchQuery);
 			break;
 
+		case 'none':
+			showCustomToast('Nothing found on this node for that search.');
+			setTimeout(hideCustomToast, 4000);
+			break;
+
 		default:
 			break;
 	}
 }
 
-function checkErgoIdentifier(input) {
-  try {
-    qfleetSDKcore.ErgoAddress.fromBase58(input);
+//What a search box entry is, asked of the node: address, then tx (mined or pending), token, block, box.
+//Sets searchType, which searchAddress() waits on.
+async function checkErgoIdentifier(input) {
+	try {
+		qfleetSDKcore.ErgoAddress.fromBase58(input);
+		searchType = "0";
+		return;
+	} catch {}
 
-    searchType = "0";
-    return;
-  } catch {}
-
-	if (input.length == 64) {
-		try {
-			$.get(`${API_HOST}transactions/${input}`,
-	  		function (data) {
-	  			searchType = "1";
-	  		});
-		} catch {}
-
-		if (MEMPOOL_API_HOST) {
-			$.get(`${MEMPOOL_API_HOST}transactions/${input}`,
-			function (data) {
-				searchType = "1";
-			});
-		}
-
-		try {
-			$.get(`${API_HOST}tokens/${input}`,
-	  		function (data) {
-	  			searchType = "2";
-	  		});
-		} catch {}
-
-		try {
-			$.get(`${API_HOST}blocks/${input}`,
-	  		function (data) {
-	  			searchType = "3";
-	  		});
-		} catch {}
-	} else {
-		searchType = "2";
+	if (/^\d+$/.test(input)) {
+		searchType = "3";
+		return;
 	}
+
+	if (!/^[0-9a-fA-F]{64}$/.test(input)) {
+		searchType = 'none';
+		return;
+	}
+
+	const found = path => LiteNode.get(path).then(() => true, () => false);
+	const checks = [
+		['1', 'blockchain/transaction/byId/' + input],
+		['1', 'transactions/unconfirmed/byTransactionId/' + input],
+		['2', 'blockchain/token/byId/' + input],
+		['3', 'blocks/' + input + '/header'],
+		['4', 'blockchain/box/byId/' + input]
+	];
+	const results = await Promise.all(checks.map(check => found(check[1])));
+	const hit = checks.find((check, i) => results[i]);
+
+	searchType = hit ? hit[0] : 'none';
 }
 
 //Format strings
@@ -791,15 +757,6 @@ function getAssetTitleParams(token, tokenId, name, iconIsToTheLeft, scam = false
 		hasThumb = true;
 	}
 
-	if (name == 'Crooks Finance Stake Key') {
-		imgSrc = 'https://crooks-fi.com/images/logo.png';
-		hasThumb = false;
-	}
-
-	if (name == 'Mew Fun Lottery Ticket') {
-		imgSrc = 'https://api.ergexplorer.com/nftcache/bafybeie6z4zm7ahjvlawjfq4idojdrahklksygpfmb4zvlrx3id3h5dyty.png';
-		hasThumb = false;
-	}
 
 	if (token && token.iconurl) {
 		imgSrc = token.iconurl;
@@ -840,55 +797,66 @@ function zeroPad (num, places) {
 	return String(num).padStart(places, '0');
 }
 
-//Mainnet/Testnet
+//The network is whatever the selected node runs, saved when it was picked and checked again on load
 function setupMainnetTestnet() {
-	networkType = localStorage.getItem('network');
-	
-	if (networkType == undefined) {
-		networkType = 'mainnet';
-	}
+	networkType = LiteNode.getSavedNetwork();
 
 	if (networkType == 'testnet') {
-		$('.networkType').html('Testnet')
-		$('.networkType').removeClass('text-light');
-		$('.networkType').addClass('erg-span-important');
-		localStorage.setItem('network', 'testnet');
-		$('#testnetNotice').show();
-		API_HOST = API_HOST_2 = 'https://api-testnet.ergoplatform.com/';
-		MEMPOOL_API_HOST = null;
-		FEE_ADDRESS = 'Bf1X9JgQTUtgntaer91B24n6kP8L2kqEiQqNf1z97BKo9UbnW3WRP9VXu8BXd1LsYCiYbHJEdWKxkF5YNx5n7m31wsDjbEuB3B13ZMDVBWkepGmWfGa71otpFViHDCuvbw1uNicAQnfuWfnj8fbCa4';
-	} else {
-		$('.networkType').html('Mainnet')
+		$(function() {
+			$('#testnetNotice').show();
+		});
+		FEE_ADDRESS = TESTNET_FEE_ADDRESS;
 	}
 }
 
-function switchToMainnet(e) {
-	e.preventDefault();
-
-	if (networkType == 'mainnet') return;
-
-	localStorage.setItem('network', 'mainnet');
-
-	window.location.assign('/');
+function isConnectPage() {
+	return /^\/connect(\.html)?$/.test(window.location.pathname);
 }
 
-// Switch to Mainnet and reload the same page.
-function viewOnMainnet(e) {
-	e.preventDefault();
+//No node yet: everything else needs one, so go pick it first and come back
+function requireNode() {
+	if (LiteNode.getUrl() || isConnectPage()) {
+		return true;
+	}
 
-	localStorage.setItem('network', 'mainnet');
+	window.location.replace('/connect#return=' + encodeURIComponent(window.location.pathname + window.location.search + window.location.hash));
 
-	window.location.reload();
+	return false;
 }
 
-function switchToTestnet(e) {
-	e.preventDefault();
+function initNodeBadge() {
+	const url = LiteNode.getUrl();
 
-	if (networkType == 'testnet') return;
+	if (!url) {
+		$('.nodeBadgeText').text('Pick a node');
+		return;
+	}
 
-	localStorage.setItem('network', 'testnet');
+	const host = new URL(url).host;
+	$('.nodeBadgeText').text(host);
 
-	window.location.assign('/');
+	LiteNode.get('blockchain/indexedHeight', { timeout: 10000 }).then(function(data) {
+		const behind = Number(data.fullHeight) - Number(data.indexedHeight);
+
+		$('.node-badge').addClass(behind > 2 ? 'node-lagging' : 'node-ok')
+			.attr('title', host + ' at ' + nFormatter(Number(data.fullHeight), 0, true, true)
+				+ (behind > 2 ? ', index ' + behind + ' blocks behind' : '') + '. Change node');
+
+		if (behind > 2) {
+			$('#nodeLagNotice').text('This node\'s index is ' + behind + ' blocks behind, so recent activity may be missing.').show();
+		}
+	}).catch(function(e) {
+		$('.node-badge').addClass('node-down').attr('title', host + ': ' + e.message + ' Change node');
+	});
+
+	LiteNode.info().then(function(info) {
+		const network = info.network == 'testnet' ? 'testnet' : 'mainnet';
+
+		if (network != networkType) {
+			LiteNode.use(url, network);
+			window.location.reload();
+		}
+	}).catch(function() {});
 }
 
 function setOfficialLink() {
@@ -1372,10 +1340,8 @@ function escapeHtmlString(value) {
 }
 
 /**
- * Pending txs are read from our node's mempool (MEMPOOL_API_HOST) and from
- * api.ergoplatform.com, then merged. The explorer's mempool misses txs that
- * entered the network through other nodes (Nautilus submits via sigmaspace) and
- * at times serves empty pages; ours pulls from several nodes but is mainnet-only.
+ * Merges lists of pending txs (from the node's mempool views) into one, dropping repeats
+ * and keeping one side of any double-spend.
  */
 function mergeMempoolItems(lists) {
 	const byId = new Map();
@@ -1422,9 +1388,7 @@ function mempoolFeePerByte(tx) {
 }
 
 function showLoadError(message) {
-	if (networkType == 'testnet') {
-		message += '<br><a href="#" onclick="viewOnMainnet(event)">View on Mainnet</a>';
-	}
+	message += '<br><a href="connect">Change node</a>';
 
 	$('#loadErrorMessage').html(message);
 	$('#loadError').show();
@@ -1495,7 +1459,7 @@ function showSystemNotification(title, body) {
 	}
 
 	try {
-		const notification = new Notification(title, { body: body, icon: 'https://ergexplorer.com/images/logo.png' });
+		const notification = new Notification(title, { body: body, icon: '/images/logo.png' });
 
 		notification.onclick = function() {
 			window.focus();
@@ -1652,17 +1616,8 @@ function getOwnerTypeClass(type) {
 }
 
 //Addressbook
+//Labels come only from the contract templates shipped with the page; there is no address book to ask
 function getAddressesInfo() {
-	var jqxhr = $.post(ERGEXPLORER_API_HOST + 'addressbook/getAddressesInfo',
-		{'addresses' : addresses},
-	function (data) {
-		if (data.total == 0) return;
-
-		addressbook = data.items;
-
-		labelAddressStrings();
-	});
-
 	loadContractTemplates().then(function(analyzer) {
 		contractAnalyzer = analyzer;
 		labelAddressStrings();
@@ -1835,7 +1790,7 @@ function sleep(ms) {
 
 async function checkLinkExists(url) {
     try {
-        const response = await fetch(url, { method: 'HEAD' }); // Use HEAD for minimal data
+        const response = await fetch(url, { method: 'HEAD' }); // lite-allow-media: HEAD of an NFT media link
         return response.ok; // `true` if the status code is 2xx or 3xx
     } catch (error) {
         console.error('Error checking link:', error);

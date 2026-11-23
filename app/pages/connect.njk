@@ -1,0 +1,42 @@
+{% extends "layout.njk" %}
+
+{% block navigation %}
+	{% import 'macros/nav-macro.njk' as nav %}
+	{{nav.active('connect')}}
+{% endblock %}
+
+{% block content %}
+	<div class="col-md-12">
+		<div class="row w-100 div-cell-dark connect-card">
+			<div class="col-md-12">
+				<h2>Pick your node</h2>
+				<p class="text-light">Everything this explorer shows comes from the node you pick. It needs the extra index turned on.</p>
+
+				<form id="connectForm" class="connect-form" autocomplete="off">
+					<input id="nodeUrlInput" type="text" class="form-control form-control-lg" placeholder="https://your-node:9053" spellcheck="false" autocapitalize="off">
+					<button id="connectButton" class="btn btn-lg btn-info" type="submit">Connect</button>
+				</form>
+
+				<div id="connectStatus" class="connect-status" style="display: none;"></div>
+
+				<div id="savedNodes" class="saved-nodes" style="display: none;">
+					<h3 class="stats-heading erg-span">Your nodes</h3>
+					<div id="savedNodesList"></div>
+				</div>
+
+				<details class="connect-help">
+					<summary>Setting up a node</summary>
+					<ul>
+						<li>In the node's config set <code>ergo.node.extraIndex = true</code> and let it sync from the start of the chain.</li>
+						<li>This page is on https, so the node needs https too. A node on this computer (<code>http://localhost:9053</code>) also works.</li>
+						<li>For a node on your home network over plain http, run this explorer next to it from the release zip.</li>
+					</ul>
+				</details>
+			</div>
+		</div>
+	</div>
+{% endblock %}
+
+{% block scripts %}
+	<script src="./scripts/connect.js?v=1"></script>
+{% endblock %}

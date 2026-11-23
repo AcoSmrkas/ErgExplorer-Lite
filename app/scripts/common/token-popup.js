@@ -73,23 +73,13 @@
 
 	function fetchToken(id) {
 		if (Object.prototype.hasOwnProperty.call(tokenCache, id)) {
-			return $.Deferred().resolve(tokenCache[id]).promise();
+			return Promise.resolve(tokenCache[id]);
 		}
 		if (inflight[id]) {
 			return inflight[id];
 		}
 
-		var host = (typeof ERGEXPLORER_API_HOST !== 'undefined')
-			? ERGEXPLORER_API_HOST
-			: 'https://api.ergexplorer.com/';
-
-		var req = $.ajax({
-			url: host + 'tokens/byId',
-			type: 'POST',
-			contentType: 'application/json',
-			data: JSON.stringify({ ids: [id] })
-		}).then(function (data) {
-			var token = (data && data.items && data.items[0]) ? data.items[0] : null;
+		var req = LiteNode.token(id).then(function (token) {
 			tokenCache[id] = token;
 			delete inflight[id];
 			return token;

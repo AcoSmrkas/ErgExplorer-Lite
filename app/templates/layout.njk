@@ -5,20 +5,23 @@
 		<base href="/">
 		<meta name="viewport" content="width=device-width, initial-scale=1">
 
-		<title>Erg Explorer - Ergo blockchain explorer</title>
+		<title>Erg Explorer Lite</title>
+
+		<!-- Pages may load images and media from anywhere (NFTs), but scripts, styles and fonts only from here -->
+		<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' http: https:; img-src * data: blob:; media-src * data: blob:; frame-src 'none'; object-src 'none'; base-uri 'self'">
 
 		<!-- Favicon -->
 		<link rel="icon" type="image/png" href="favicon.png">
 		<link rel="apple-touch-icon" type="image/png" href="apple-touch-icon.png">
 
 		<!-- Bootstrap 5 CSS -->
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-9ndCyUaIbzAi2FUVXJi0CjmCapSmO7SnpJef0486qhLnuZ2cdeRhO02iuK6FUUVM" crossorigin="anonymous">
+        <link href="vendor/bootstrap/bootstrap.min.css" rel="stylesheet">
 
         <!-- Additional theme file -->
         <link id="additionalTheme" href="" rel="stylesheet" media="(prefers-color-scheme: dark)">
 
 		<!-- Font Awesome CSS -->
-		<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+		<link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
 		<link rel="stylesheet" href="styles/vars.css?v=2">
 
 		<!-- build:css styles/main.css -->
@@ -26,6 +29,7 @@
 		<!-- endbuild -->
 		<link rel="stylesheet" href="styles/mew-ad.css?v=1">
 		<link rel="stylesheet" href="styles/funding.css?v=2">
+		<link rel="stylesheet" href="styles/lite.css?v=1">
 		<link rel="preload" href="fonts/mew-ad-manrope.woff2" as="font" type="font/woff2" crossorigin>
 		<link rel="preload" href="fonts/mew-ad-satisfy.woff2" as="font" type="font/woff2" crossorigin>
 				
@@ -33,6 +37,7 @@
 			
 		<script src="./scripts/common/config.js?v=44"></script>
 		<script src="./scripts/common/params.js?v=41"></script>
+		<script src="./scripts/common/node.js?v=1"></script>
 
         <script type="text/javascript">
         	var theme = 'dark';
@@ -50,7 +55,7 @@
 				document.getElementById('index').setAttribute('data-theme', theme);
 
 				if (theme != 'light') {
-                    document.getElementById('additionalTheme').setAttribute('href', 'https://cdn.jsdelivr.net/npm/bootstrap-dark-5@1.1.3/dist/css/bootstrap-nightfall.min.css');
+                    document.getElementById('additionalTheme').setAttribute('href', 'vendor/bootstrap-dark/bootstrap-nightfall.min.css');
 				} else {
 					document.getElementById('additionalTheme').setAttribute('href', '');
 				}
@@ -63,7 +68,7 @@
 
 				if (theme === 'mew') {
 				    Array.from(themeSwitchers).forEach((x) => {
-				        x.innerHTML = '<img style="position:relative;top:-2px;height:18px;width:auto;" src="https://mewfinance.com/logo.png" />';
+				        x.innerHTML = '<img style="position:relative;top:-2px;height:18px;width:auto;" src="./images/logo-new-mew.png" />';
 				    });
 
 				    let eLogo = document.getElementById('erg-logo');
@@ -115,22 +120,12 @@
         </script>
 
 		<!-- SEO -->
-		<meta name="description" content="Discover Erg Explorer: Your independent gateway to exploring Ergo blockchain's blocks, addresses, transactions, tokens, and more.">
+		<meta name="description" content="Erg Explorer Lite: an Ergo blockchain explorer that reads everything from your own indexed node.">
 		<meta name="keywords" content="ergo, erg, blockchain, explorer, tool, browser, transaction, block, token, nft, scan, wallet, search, address, explore">
 
-		<meta property="og:title" content="Erg Explorer - Ergo blockchain explorer" />
-		<meta property="og:description" content="Discover Erg Explorer: Your independent gateway to exploring Ergo Blockchain's blocks, addresses, transactions, tokens, and more." />
+		<meta property="og:title" content="Erg Explorer Lite" />
 		<meta property="og:type" content="website" />
-		<meta property="og:site_name" content="Erg Explorer - Ergo blockchain explorer" />
-		<meta property="og:url" content="https://ergexplorer.com" />
-		<meta property="og:image" content="https://ergexplorer.com/images/logo.png" />
-		<meta property="og:image:url" content="https://ergexplorer.com/images/logo.png" />
-		<meta property="og:image:alt" content="Visit Ergexplorer.com" />
-		<meta name="twitter:card" content="summary" />
-		<meta name="twitter:title" content="Erg Explorer - Ergo blockchain explorer" />
-		<meta property="twitter:description" content="Discover Erg Explorer: Your independent gateway to exploring Ergo Blockchain's blocks, addresses, transactions, tokens, and more." />
-		<meta name="twitter:site" content="@ergexplorer" />
-		<meta property="twitter:image" content="https://ergexplorer.com/images/logo.png" />
+		<meta property="og:image" content="images/logo.png" />
 
 	</head>
 
@@ -142,35 +137,8 @@
 		<div class="container p-0">
 
 
-			{# <div id="ad1" class="w-100 baner text-center p-0" style="margin-bottom: 5px !important; margin-top: 10px !important;">
-				<a class="p-0" style="max-height: 100px;width: auto;margin: 0 auto;" href="https://linktr.ee/peperg" target="_new"><video src="./images/peperg4.mp4" autoplay="true" muted="true" loop="true" id="pepeAd" alt="Ad" type="video/mp4" style="max-height: 105px; width: auto; max-width:100%; margin: 0 auto;"></a>
-			</div> #}
 
-			<style>			
-				
-#pepeAd {
-	border: 1px solid var(--main-color);
-}
 
-[data-bs-theme="light"] {
-#pepeAd {
-	border: 1px solid var(--main-color);
-}
-}
-			</style>
-
-<!--
-			<div id="ad2" class="w-100 baner text-center p-0 mt-2 mt-md-3 mb-2 mb-md-3">
-				<div id="canvas-holder" style="height: 80px;" class="container container-index w-75 div-cell-dark p-0">
-					<div id="canvas-overlay">
-						<a target="_new" href="https://mewfinance.com">
-							<img src="./images/overlay5.png" alt="">
-						</a>
-					</div>
-					<div id="vanta-canvas"></div>
-				</div>
-			</div>
--->
 
 			{% include "partials/testnet-notice.njk" %}
 
@@ -216,56 +184,20 @@
 		</div>
 
 		<!-- JQuery JavaScript -->
-		<script	src="https://code.jquery.com/jquery-3.6.4.min.js"
-			integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8="
-			crossorigin="anonymous"></script>
+		<script src="vendor/jquery.min.js"></script>
 
 		<!-- Bootstrap 5 JavaScript -->
-		<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz" crossorigin="anonymous"></script>
+		<script src="vendor/bootstrap/bootstrap.bundle.min.js"></script>
 
 		<!-- Custom JavaScript -->
-		<script src="https://cdnjs.cloudflare.com/ajax/libs/bignumber.js/8.0.2/bignumber.min.js" integrity="sha512-7UzDjRNKHpQnkh1Wf1l6i/OPINS9P2DDzTwQNX79JxfbInCXGpgI1RPb3ZD+uTP3O5X7Ke4e0+cxt2TxV7n0qQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-		<script src="https://cdn.jsdelivr.net/npm/json-bigint-parser-browser@1.0.4/json-bigint-browser.min.js"></script>
-		<script src="./scripts/common/token-icons.js?v=46"></script>
-		<script src="./scripts/main.js?v=72"></script>
+		<script src="vendor/bignumber.min.js"></script>
+		<script src="vendor/json-bigint-browser.min.js"></script>
+		<script src="./scripts/common/token-thumb-ids.js?v=1"></script>
+		<script src="./scripts/common/token-icons.js?v=47"></script>
+		<script src="./scripts/main.js?v=73"></script>
 		<script src="./scripts/common/token-popup.js?v=42"></script>
 		<script src="./scripts/common/mew-ad.js?v=1"></script>
 
-<!--
-	<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
-	<script src="https://cdn.jsdelivr.net/npm/vanta@0.5.24/dist/vanta.cells.min.js"></script>
-	-->
-<script>
-/*
-const vanta = VANTA.CELLS({
-  el: "#vanta-canvas",
-	mouseControls: false,
-	touchControls: false,
-	gyroControls: false,
-	minHeight: 80.00,
-	minWidth: 530.00,
-	scale: 0.30,
-	color1: 0x227f9e,
-	color2: 0xaa72ce,
-	size: 10.00,
-	speed: 2.00
-});
-
-window.addEventListener('resize', resizeDiv);
-
-function resizeDiv() {
-  var div = document.getElementById('canvas-holder');
-  var width = div.offsetWidth;
-  var height = (width * 80) / 530; // Calculate height maintaining aspect ratio
-  div.style.height = height + 'px';
-}
-
-// Initial call to set the height
-resizeDiv();
-*/
-
-
-</script>	
 		<script src="./scripts/3rd-party/fleet.js?v=41"></script>
 		{% block scripts %}{% endblock %}
 	</body>
