@@ -13,8 +13,8 @@ $(function() {
 function onGotPrices() {
 	if (!gotTokenIcons || !gotPrices) return;
 
-	// Neither explorer API serves the genesis boxes by id. genesis.js is missing when a browser pairs
-	// this script with an older cached copy of the page.
+	// The node serves no genesis box by id. genesis.js is missing when a browser pairs this script
+	// with an older cached copy of the page.
 	const genesisBox = typeof getGenesisBox == 'function' ? getGenesisBox(boxId) : null;
 
 	if (genesisBox) {
@@ -22,95 +22,20 @@ function onGotPrices() {
 		return;
 	}
 
-	getBox(false);
+	getBox();
 }
 
-function getBoxUrl(mempool) {
-	let boxUrl = API_HOST_2 + 'boxes/' + boxId;
+// A box in an indexed block, else an output of a tx in the node's mempool
+function getBox() {
+	LiteNode.box(boxId)
+	.then(box => {
+		const pending = !!box.pending;
+		delete box.pending;
 
-	if (networkType == 'testnet') {
-		boxUrl = API_HOST_2 + 'api/v1/boxes/' + boxId;
-	}
-
-	if (mempool) {
-		boxUrl = 'https://api.ergoplatform.com/boxes/unconfirmed/' + boxId;
-
-		if (networkType == 'testnet') {
-			boxUrl = 'https://api-testnet.ergoplatform.com/boxes/unconfirmed/' + boxId;
-		}		
-	}
-
-	return boxUrl;
-}
-
-function getBox(mempool) {
-	if (mempool && MEMPOOL_API_HOST) {
-		getPendingBox();
-		return;
-	}
-
-	let boxUrl = getBoxUrl(mempool);
-
-	fetch(boxUrl)
-	.then(async response => {
-		if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-
-        let abuffer = await response.arrayBuffer();
-		const buffer = new TextDecoder("utf-8").decode(abuffer);
-        const stringFromBuffer = buffer.toString('utf8');
-
-        txData = JSONbig.parse(stringFromBuffer);
-
-		if (mempool) {
-			let walletAddress = txData.inputs[0].address;
-
-			let addressMempoolUrl = API_HOST_2 + 'mempool/transactions/byAddress/' + walletAddress;
-
-		    if (networkType == 'testnet') {
-		        addressMempoolUrl = API_HOST_2 + 'api/v1/mempool/transactions/byAddress/' + walletAddress
-		    }
-
-			$.get(addressMempoolUrl, function(data) {
-				for (let i = 0; i < data.items.length; i++) {
-					if (data.items[i].id == boxId) {
-						printBox(data.items[i], mempool);
-						break;
-					}
-				}
-
-				printBox(txData, mempool);
-			}).fail(function() {
-				printBox(txData, mempool);
-			});
-		} else {
-			printBox(txData, mempool);
-		}
+		printBox(box, pending);
 	})
-    .catch(function() {
-    	if (mempool) {
-    		showLoadError('No results matching your query.');
-	        $('#txLoading').hide();
-    	} else {
-    		getBox(true);
-    	}
-    });
-}
-
-// An output of a pending tx, from our node's pool.
-function getPendingBox() {
-	fetch(MEMPOOL_API_HOST + 'boxes/' + boxId)
-	.then(async response => {
-		if (!response.ok) {
-			throw new Error('Network response was not ok');
-		}
-
-		const buffer = new TextDecoder("utf-8").decode(await response.arrayBuffer());
-		printBox(JSONbig.parse(buffer), true);
-	})
-	.catch(function() {
-		showLoadError('No results matching your query.');
+	.catch(function(e) {
+		showLoadError(e.kind == 'notfound' || e.kind == 'http' ? 'No results matching your query.' : e.message);
 		$('#txLoading').hide();
 	});
 }
@@ -120,7 +45,16 @@ function printBox(data, mempool) {
 	$('#boxHeader').html('<p><a href="Copy to clipboard!" onclick="copyTransactionAddress(event)">' + data.boxId + ' &#128203;</a></p>');
 	$('#boxHeaderMobile').html('<p><a href="Copy to clipboard!" onclick="copyTransactionAddress(event)">' + data.boxId.substr(0, 8) + '...' + data.boxId.substr(data.boxId.length - 4) + ' &#128203;</a></p>');
 
+	if (mempool) {
+		$('#boxTime').html('<p class="text-warning">Pending</p>');
+	}
+
 	const rawData = JSON.stringify(data, null, 4);
+
+	// The node gives a box its height but not its block id; the block page takes either
+	if (data.blockId == null && data.settlementHeight != null) {
+		data.blockId = data.settlementHeight;
+	}
 
 	delete data.boxId;
 

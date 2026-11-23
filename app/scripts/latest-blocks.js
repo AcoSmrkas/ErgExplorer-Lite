@@ -1,136 +1,287 @@
-//The block list comes from whichever source answers first: sigmaspace's GraphQL explorer, then
-//api.ergoplatform, which is added after HEDGE_DELAY or as soon as sigmaspace fails. api.ergoplatform
-//alone is at times very slow. Blocks don't wait for prices; the dollar rewards fill in when they come
-const BLOCKS_GQL_HOST = 'https://explore.sigmaspace.io/api/graphql';
-const BLOCKS_HEDGE_DELAY = 1500;
-const BLOCKS_SOURCE_TIMEOUT = 20000;
-const BLOCK_SUMMARY_FIELDS = 'headerId height timestamp txsCount blockSize blockMiningTime minerAddress minerReward blockFee';
+//The rows come from block headers, one request for the page. Transactions, reward, fees and size
+//need each full block, which can be hundreds of kB, so those cells fill in a few blocks at a time
+const BLOCK_DETAIL_BATCH = 5;
 
-//"Lithos only" lists just the blocks mined through the Lithos pool, kept in the url like the page offset
-const LITHOS_ONLY_PARAM = 'lithos';
-const lithosOnly = params[LITHOS_ONLY_PARAM] == 'true';
+//Full blocks already read, by header id; the page's auto-update only reads the new ones
+const blockDetails = new Map();
+let pricesReady = false;
 
-$(function() {  
-	$('#toggleLithos').prop('checked', lithosOnly);
-
+$(function() {
 	const pricesLoaded = new Promise(resolve => getPrices(resolve));
 
-	printLatestBlocks(pricesLoaded);
+	pricesLoaded.then(() => {
+		pricesReady = true;
+		fillRewardUsd();
+	});
+
+	printLatestBlocks();
 });
 
-function onToggleLithosOnly() {
-	if ($('#toggleLithos').prop('checked')) {
-		params[LITHOS_ONLY_PARAM] = 'true';
-	} else {
-		delete(params[LITHOS_ONLY_PARAM]);
+function printLatestBlocks() {
+	fetchTipHeight()
+	.then(tip => fetchPageHeaders(tip).then(headers => ({ tip: tip, headers: headers })))
+	.then(page => {
+		renderBlocks(page);
+
+		$('#blocksHolder').show();
+
+		loadBlockDetails(page.headers);
+		startAutoUpdate(page);
+	})
+	.catch(function(error) {
+		console.warn('Latest blocks unavailable:', error);
+		showLoadError('Failed to fetch latest blocks.' + (error && error.message ? ' ' + error.message : ''));
+	})
+	.finally(function() {
+		$('#txLoading').hide();
+	});
+}
+
+//The newest full block the node has
+async function fetchTipHeight() {
+	const info = await LiteNode.get('info');
+
+	return Number(info.fullHeight);
+}
+
+//The page's headers, newest first, plus the one below the page for the last row's block time
+async function fetchPageHeaders(tip) {
+	const top = tip - Number(offset);
+	const bottom = Math.max(1, top - Number(ITEMS_PER_PAGE) + 1);
+
+	if (top < 1) {
+		return [];
 	}
 
-	params['offset'] = 0;
+	//fromHeight is exclusive
+	const headers = await LiteNode.get('blocks/chainSlice?fromHeight=' + Math.max(0, bottom - 2) + '&toHeight=' + top);
 
-	window.location.assign(getCurrentUrlWithParams());
-}
-
-function printLatestBlocks(pricesLoaded) {
-	//Each mode settles which of its blocks are Lithos blocks, for the chip
-	let lithosHeights;
-	const blocks = lithosOnly
-		? fetchLithosBlocks().then(data => {
-			lithosHeights = Promise.resolve(new Set(data.items.map(item => item.height)));
-			return data;
-		})
-		: fetchLatestBlocks().then(data => {
-			lithosHeights = getLithosHeightsFor(data.items);
-			return data;
-		});
-
-	blocks
-	.then(data => {
-		renderBlocks(data, lithosHeights, pricesLoaded);
-
-        $('#blocksHolder').show();
-
-        startAutoUpdate(data, pricesLoaded);
-    })
-    .catch(function(error) {
-    	console.warn('Latest blocks unavailable:', error);
-        showLoadError('Failed to fetch latest blocks.');
-    })
-    .finally(function() {        
-        $('#txLoading').hide();
-    });
-}
-
-function getLithosHeightsFor(items) {
-	return items.length ? getLithosBlockHeights(Math.min(...items.map(item => item.height))) : Promise.resolve(new Set());
+	return (headers || [])
+		.filter(header => header.height >= bottom - 1 && header.height <= top)
+		.sort((a, b) => b.height - a.height);
 }
 
 //Rows above newAbove are new since the last render and flash once
-function renderBlocks(data, lithosHeights, pricesLoaded, newAbove = Infinity) {
+function renderBlocks(page, newAbove = Infinity) {
+	const headers = page.headers;
+	const top = page.tip - Number(offset);
+	const bottom = Math.max(1, top - Number(ITEMS_PER_PAGE) + 1);
 	let formattedResult = '';
-	let totalBlocks = data.total;
-	let items = data.items;
 
-    setupPagination(totalBlocks);
+	setupPagination(page.tip);
 
-	for (let i = 0; i < items.length; i++) {
-		const item = items[i];
+	for (let i = 0; i < headers.length; i++) {
+		const header = headers[i];
 
-    		formattedResult += '<tr' + (item.height > newAbove ? ' class="block-new"' : '') + '>';
+		//The header below the page only gives the last row its block time
+		if (header.height < bottom) {
+			continue;
+		}
 
-        //Height
-    		formattedResult += '<td><span class="d-lg-none"><strong>Height: </strong></span><a href="' + getBlockUrl(item.id) + '">' + nFormatter(item.height, 2, true, true) + '</a></td>';
+		const miner = getMinerAddress(header);
 
-        //Time
-    		formattedResult += '<td><span class="d-lg-none"><strong>Time: </strong></span>' + formatDateString(item.timestamp) + '</td>';
+		formattedResult += '<tr data-id="' + header.id + '"' + (header.height > newAbove ? ' class="block-new"' : '') + '>';
 
-        //Block time
-    		formattedResult += '<td><span class="d-lg-none"><strong>Block time: </strong></span>' + formatBlockTime(getMiningTime(items, i)) + '</td>';
-        
-        //Transactions
-    		formattedResult += '<td><span class="d-lg-none"><strong>TXs: </strong></span>' + item.transactionsCount + '</td>';
+		//Height
+		formattedResult += '<td><span class="d-lg-none"><strong>Height: </strong></span><a href="' + getBlockUrl(header.id) + '">' + nFormatter(header.height, 2, true, true) + '</a></td>';
 
-        //Mined by: the address book names the known pools. A Lithos block gets its chip once the Lithos blocks are known
-        addAddress(item.miner.address);
-    		formattedResult += '<td data-height="' + item.height + '"><span class="d-lg-none"><strong>Mined by: </strong></span><a class="address-string" addr="' + item.miner.address + '" href="' + getWalletAddressUrl(item.miner.address) + '">' + item.miner.name + '</a></td>';	
+		//Time
+		formattedResult += '<td><span class="d-lg-none"><strong>Time: </strong></span>' + formatDateString(header.timestamp) + '</td>';
 
-        //Reward. The dollar value fills in once the prices are in
-    		formattedResult += '<td><span class="d-lg-none"><strong>Reward: </strong></span>' + formatErgValueString(item.minerReward) + ' <span class="text-light reward-usd" data-reward="' + item.minerReward + '"></span></td>';
+		//Block time
+		formattedResult += '<td><span class="d-lg-none"><strong>Block time: </strong></span>' + formatBlockTime(getMiningTime(headers, i)) + '</td>';
 
-        //Fees. Only the GraphQL source has them
-    		formattedResult += '<td><span class="d-lg-none"><strong>Fees: </strong></span>' + (item.fees === undefined ? '<span class="block-meta">-</span>' : formatErgValueString(item.fees)) + '</td>';
+		//Transactions
+		formattedResult += '<td><span class="d-lg-none"><strong>TXs: </strong></span><span class="block-txs">' + pendingCell() + '</span></td>';
 
-        //Size
-    		formattedResult += '<td><span class="d-lg-none"><strong>Size: </strong></span>' + formatKbSizeString(item.size) + '</td>';
+		//Mined by: the key that solved the block, as a wallet address
+		if (miner) {
+			addAddress(miner);
+		}
 
-		formattedResult += '</tr>';	
+		formattedResult += '<td><span class="d-lg-none"><strong>Mined by: </strong></span>' + (miner
+			? '<a class="address-string" addr="' + miner + '" href="' + getWalletAddressUrl(miner) + '">' + formatAddressString(miner, 4) + '</a>'
+			: '<span class="block-meta">-</span>') + '</td>';
+
+		//Reward. The dollar value fills in once the prices are in
+		formattedResult += '<td><span class="d-lg-none"><strong>Reward: </strong></span><span class="block-reward">' + pendingCell() + '</span> <span class="text-light reward-usd"></span></td>';
+
+		//Fees
+		formattedResult += '<td><span class="d-lg-none"><strong>Fees: </strong></span><span class="block-fees">' + pendingCell() + '</span></td>';
+
+		//Size
+		formattedResult += '<td><span class="d-lg-none"><strong>Size: </strong></span><span class="block-size">' + pendingCell() + '</span></td>';
+
+		formattedResult += '</tr>';
 	}
 
-	if (items.length == 0) {
-		formattedResult = '<tr><td colspan="7">' + (lithosOnly ? 'No Lithos blocks yet.' : 'No blocks.') + '</td></tr>';
+	if (formattedResult == '') {
+		formattedResult = '<tr><td colspan="8">No blocks.</td></tr>';
 	}
 
 	$('#transactionsTableBody').html(formattedResult);
-    
-    getAddressesInfo();
-    tagLithosBlocks(lithosHeights);
 
-    pricesLoaded.then(() => {
-    	$('#transactionsTableBody .reward-usd').each(function() {
-    		$(this).html(formatAssetDollarPriceString(Number($(this).attr('data-reward')), ERG_DECIMALS, 'ERG'));
-    	});
-    });
+	for (const header of headers) {
+		if (blockDetails.has(header.id)) {
+			showBlockDetails(header.id);
+		}
+	}
+
+	getAddressesInfo();
 }
 
-//The first page follows the chain: a cheap tip check every AUTO_UPDATE_INTERVAL while the tab is visible,
-//and a full reload of the rows only when a new block is in. Lithos-only and older pages stay as loaded
-const AUTO_UPDATE_INTERVAL = 15000;
+function pendingCell() {
+	return '<span class="block-meta">…</span>';
+}
 
-function startAutoUpdate(data, pricesLoaded) {
-	if (lithosOnly || Number(offset) != 0) {
+function getMinerAddress(header) {
+	try {
+		return qfleetSDKcore.ErgoAddress.fromPublicKey(header.powSolutions.pk, getFleetNetwork()).toString();
+	} catch (e) {
+		return undefined;
+	}
+}
+
+//Full blocks for the headers not read yet, a few at a time, newest first
+async function loadBlockDetails(headers) {
+	const wanted = headers.filter(header => !blockDetails.has(header.id) && $('#transactionsTableBody tr[data-id="' + header.id + '"]').length > 0);
+
+	for (let i = 0; i < wanted.length; i += BLOCK_DETAIL_BATCH) {
+		const batch = wanted.slice(i, i + BLOCK_DETAIL_BATCH);
+		const blocks = await fetchFullBlocks(batch.map(header => header.id));
+
+		for (const header of batch) {
+			const block = blocks.find(item => item && item.header && item.header.id == header.id);
+
+			blockDetails.set(header.id, block ? summarizeBlock(block) : null);
+			showBlockDetails(header.id);
+		}
+	}
+}
+
+//One GET per block: some nodes turn POST /blocks/headerIds away now and then. A failed block is
+//asked again a little later before its cells give up
+const BLOCK_DETAIL_RETRIES = 2;
+const BLOCK_DETAIL_RETRY_MS = 3000;
+
+function fetchFullBlocks(ids) {
+	return Promise.all(ids.map(fetchFullBlock));
+}
+
+async function fetchFullBlock(id) {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await LiteNode.get('blocks/' + id);
+		} catch (error) {
+			if (attempt >= BLOCK_DETAIL_RETRIES || error.kind == 'notfound') {
+				console.warn('Block unavailable:', id, error);
+				return null;
+			}
+
+			await new Promise(resolve => setTimeout(resolve, BLOCK_DETAIL_RETRY_MS * (attempt + 1)));
+		}
+	}
+}
+
+function summarizeBlock(block) {
+	const transactions = (block.blockTransactions && block.blockTransactions.transactions) || [];
+	const feeTree = getFeeErgoTree();
+	let fees = new BigNumber(0);
+
+	for (const tx of transactions) {
+		for (const box of tx.outputs || []) {
+			if (box.ergoTree == feeTree) {
+				fees = fees.plus(box.value.toString());
+			}
+		}
+	}
+
+	return {
+		transactionsCount: transactions.length,
+		reward: getBlockReward(transactions, block.header.powSolutions && block.header.powSolutions.pk),
+		fees: fees.toNumber(),
+		size: block.size
+	};
+}
+
+let feeErgoTree = null;
+
+function getFeeErgoTree() {
+	if (feeErgoTree === null) {
+		feeErgoTree = qfleetSDKcore.ErgoAddress.fromBase58(FEE_ADDRESS).ergoTree;
+	}
+
+	return feeErgoTree;
+}
+
+//The block reward is the coinbase output locked to the miner's key. Since EIP-27 that box also
+//carries re-emission tokens, one per nanoERG the miner must pass on, so they are taken off
+function getBlockReward(transactions, minerPk) {
+	const coinbase = transactions && transactions[0];
+
+	if (!coinbase || !minerPk) {
+		return undefined;
+	}
+
+	const rewardBox = coinbase.outputs.find(box => box.ergoTree && box.ergoTree.includes(minerPk));
+
+	if (!rewardBox) {
+		return undefined;
+	}
+
+	const emissionTokens = new Set((coinbase.outputs[0].assets || []).map(asset => asset.tokenId));
+	let reward = new BigNumber(rewardBox.value.toString());
+
+	for (const asset of rewardBox.assets || []) {
+		if (emissionTokens.has(asset.tokenId)) {
+			reward = reward.minus(asset.amount.toString());
+		}
+	}
+
+	return reward.toNumber();
+}
+
+function showBlockDetails(id) {
+	const row = $('#transactionsTableBody tr[data-id="' + id + '"]');
+	const details = blockDetails.get(id);
+	const none = '<span class="block-meta">-</span>';
+
+	if (row.length == 0) {
 		return;
 	}
 
-	let shownTip = data.items.length ? data.items[0].height : 0;
+	row.find('.block-txs').html(details ? details.transactionsCount : none);
+	row.find('.block-reward').html(details && details.reward !== undefined ? formatErgValueString(details.reward) : none);
+	row.find('.block-fees').html(details ? formatErgValueString(details.fees) : none);
+	row.find('.block-size').html(details ? formatKbSizeString(details.size) : none);
+
+	fillRewardUsd(row);
+}
+
+function fillRewardUsd(rows = $('#transactionsTableBody tr[data-id]')) {
+	if (!pricesReady) {
+		return;
+	}
+
+	rows.each(function() {
+		const details = blockDetails.get($(this).attr('data-id'));
+
+		if (details && details.reward !== undefined) {
+			$(this).find('.reward-usd').html(formatAssetDollarPriceString(details.reward, ERG_DECIMALS, 'ERG'));
+		}
+	});
+}
+
+//The first page follows the chain: a cheap /info check every AUTO_UPDATE_INTERVAL while the tab is visible,
+//and a reload of the rows only when a new block is in. Older pages stay as loaded
+const AUTO_UPDATE_INTERVAL = 15000;
+
+function startAutoUpdate(page) {
+	if (Number(offset) != 0) {
+		return;
+	}
+
+	let shownTip = page.tip;
 	let checking = false;
 
 	const check = () => {
@@ -146,16 +297,13 @@ function startAutoUpdate(data, pricesLoaded) {
 				return;
 			}
 
-			return fetchLatestBlocks().then(data => {
-				const top = data.items.length ? data.items[0].height : 0;
+			return fetchPageHeaders(tip).then(headers => {
+				const newPage = { tip: tip, headers: headers };
 
-				//A source that lags the tip check could hand back an older list
-				if (top <= shownTip) {
-					return;
-				}
+				renderBlocks(newPage, shownTip);
+				shownTip = tip;
 
-				renderBlocks(data, getLithosHeightsFor(data.items), pricesLoaded, shownTip);
-				shownTip = top;
+				return loadBlockDetails(headers);
 			});
 		})
 		.catch(error => console.warn('Latest blocks update failed:', error))
@@ -168,110 +316,11 @@ function startAutoUpdate(data, pricesLoaded) {
 	document.addEventListener('visibilitychange', check);
 }
 
-function fetchTipHeight() {
-	const fromExplorer = () => fetchExplorerBlocks(0, 1).then(data => data.items[0].height);
-	const fromGql = () => queryGql('{ state { height } }').then(data => data.state.height);
+//The gap to the block below, when that is on the page
+function getMiningTime(headers, i) {
+	const below = headers[i + 1];
 
-	return raceSources(networkType == 'testnet' ? [fromExplorer] : [fromGql, fromExplorer]);
-}
-
-//Resolves with the first source to answer, in api.ergoplatform's shape ({ total, items })
-function fetchLatestBlocks() {
-	//sigmaspace's GraphQL explorer is mainnet only
-	return raceSources(networkType == 'testnet' ? [fetchBlocksFromExplorer] : [fetchBlocksFromGql, fetchBlocksFromExplorer]);
-}
-
-//Starts the sources in order, the next after BLOCKS_HEDGE_DELAY or as soon as one fails; the first to answer wins
-function raceSources(sources) {
-	return new Promise((resolve, reject) => {
-		let started = 0;
-		let failed = 0;
-		let done = false;
-		let hedgeTimer = null;
-
-		const startNext = () => {
-			clearTimeout(hedgeTimer);
-
-			if (done || started >= sources.length) {
-				return;
-			}
-
-			sources[started++]()
-			.then(data => {
-				if (done) return;
-				done = true;
-				clearTimeout(hedgeTimer);
-				resolve(data);
-			})
-			.catch(error => {
-				console.warn('Blocks source failed:', error);
-
-				if (++failed == sources.length) {
-					reject(error);
-				} else {
-					startNext();
-				}
-			});
-
-			hedgeTimer = setTimeout(startNext, BLOCKS_HEDGE_DELAY);
-		};
-
-		startNext();
-	});
-}
-
-function fetchBlocksFromExplorer() {
-	return fetchExplorerBlocks(offset, ITEMS_PER_PAGE);
-}
-
-function fetchBlocksFromGql() {
-	const query = 'query($skip: Int, $take: Int) { state { height } blocks(skip: $skip, take: $take) { ' + BLOCK_SUMMARY_FIELDS + ' } }';
-
-	return queryGql(query, { skip: Number(offset), take: Number(ITEMS_PER_PAGE) })
-	.then(data => {
-		if (!data.blocks || data.blocks.length == 0) {
-			throw new Error('sigmaspace GraphQL: no blocks');
-		}
-
-		return {
-			//The chain counts from height 1, so the tip height is the number of blocks
-			total: data.state.height,
-			items: data.blocks.map(gqlBlockToExplorer)
-		};
-	});
-}
-
-function queryGql(query, variables = {}) {
-	return fetch(BLOCKS_GQL_HOST, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ query: query, variables: variables }),
-		signal: AbortSignal.timeout(BLOCKS_SOURCE_TIMEOUT)
-	})
-	.then(response => {
-		if (!response.ok) {
-			throw new Error('sigmaspace GraphQL HTTP ' + response.status);
-		}
-
-		return response.json();
-	})
-	.then(json => {
-		if (!json.data || json.errors) {
-			throw new Error('sigmaspace GraphQL: ' + JSON.stringify(json.errors || 'no data'));
-		}
-
-		return json.data;
-	});
-}
-
-//The GraphQL source gives each block's mining time; with the explorer it is the gap to the block below, when that is on the page
-function getMiningTime(items, i) {
-	if (items[i].miningTime !== undefined) {
-		return items[i].miningTime;
-	}
-
-	const below = items[i + 1];
-	return below && below.height == items[i].height - 1 ? items[i].timestamp - below.timestamp : undefined;
+	return below && below.height == headers[i].height - 1 ? headers[i].timestamp - below.timestamp : undefined;
 }
 
 function formatBlockTime(ms) {
@@ -281,102 +330,4 @@ function formatBlockTime(ms) {
 
 	const seconds = Math.max(0, Math.round(ms / 1000));
 	return (seconds >= 60 ? Math.floor(seconds / 60) + 'm ' : '') + (seconds % 60) + 's';
-}
-
-function gqlBlockToExplorer(block) {
-	return {
-		id: block.headerId,
-		height: block.height,
-		timestamp: Number(block.timestamp),
-		transactionsCount: block.txsCount,
-		//The explorer names a miner by the last 8 characters of its reward address
-		miner: { address: block.minerAddress, name: block.minerAddress.slice(-8) },
-		minerReward: Number(block.minerReward),
-		fees: Number(block.blockFee),
-		miningTime: Number(block.blockMiningTime),
-		size: block.blockSize
-	};
-}
-
-/**
- * A page of Lithos blocks, newest first. The heights come from the Lithos proof-of-spend
- * boxes (see getLithosBlockHeights), the rows from whichever block source answers first
- */
-async function fetchLithosBlocks() {
-	const heights = [...await getLithosBlockHeights(0, Infinity)].sort((a, b) => b - a);
-	const pageHeights = heights.slice(Number(offset), Number(offset) + Number(ITEMS_PER_PAGE));
-
-	if (pageHeights.length == 0) {
-		return { total: heights.length, items: [] };
-	}
-
-	const sources = [() => fetchBlocksAtHeightsFromExplorer(pageHeights)];
-
-	if (networkType != 'testnet') {
-		sources.unshift(() => fetchBlocksAtHeightsFromGql(pageHeights));
-	}
-
-	const items = await raceSources(sources);
-
-	return { total: heights.length, items: items };
-}
-
-//All the heights in one query, one alias each
-function fetchBlocksAtHeightsFromGql(heights) {
-	const query = '{ ' + heights.map((height, i) => 'b' + i + ': blocks(height: ' + Number(height) + ') { ' + BLOCK_SUMMARY_FIELDS + ' }').join(' ') + ' }';
-
-	return queryGql(query)
-	.then(data => heights.map((height, i) => {
-		const block = (data['b' + i] || [])[0];
-
-		if (!block) {
-			throw new Error('sigmaspace GraphQL: no block at height ' + height);
-		}
-
-		return gqlBlockToExplorer(block);
-	}));
-}
-
-//The explorer can't look a block up by height, but counting back from the tip is quick for recent blocks
-async function fetchBlocksAtHeightsFromExplorer(heights) {
-	const tip = (await fetchExplorerBlocks(0, 1)).items[0].height;
-
-	return Promise.all(heights.map(async height => {
-		let block = (await fetchExplorerBlocks(tip - height, 1)).items[0];
-
-		//A block found since the tip was read shifts the list by one
-		if (block && block.height != height) {
-			block = (await fetchExplorerBlocks(tip - height + (block.height - height), 1)).items[0];
-		}
-
-		if (!block || block.height != height) {
-			throw new Error('api.ergoplatform: no block at height ' + height);
-		}
-
-		return block;
-	}));
-}
-
-function fetchExplorerBlocks(skip, limit) {
-	return fetch(API_HOST + 'blocks?limit=' + limit + '&sortBy=height&sortDirection=desc&offset=' + skip, { signal: AbortSignal.timeout(BLOCKS_SOURCE_TIMEOUT) })
-	.then(response => {
-		if (!response.ok) {
-			throw new Error('api.ergoplatform HTTP ' + response.status);
-		}
-
-		return response.json();
-	});
-}
-
-//The miner of a Lithos block is the lender whose collateral it spent, so it reads like any solo miner without the chip
-function tagLithosBlocks(lithosHeights) {
-	lithosHeights
-	.then(heights => {
-		$('#transactionsTableBody td[data-height]').each(function() {
-			if (heights.has(Number($(this).attr('data-height')))) {
-				$(this).find('a.address-string').before(lithosChip() + ' ');
-			}
-		});
-	})
-	.catch(error => console.warn('Lithos blocks unavailable:', error));
 }

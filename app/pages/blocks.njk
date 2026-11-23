@@ -36,12 +36,20 @@
 						<p id="blockHeight"></p>
 					</div>
 				</div>
-				<div id="blockPoolRow" class="row w-100 p-1" style="display: none;">
+				<div class="row w-100 p-1">
 					<div class="col-5 ps-1 ps-md-2">
-						<p><strong>Pool</strong></p>
+						<p><strong>Miner</strong></p>
 					</div>
 					<div class="col-7">
-						<p id="blockPool"></p>
+						<p id="blockMiner"></p>
+					</div>
+				</div>
+				<div id="blockRewardRow" class="row w-100 p-1" style="display: none;">
+					<div class="col-5 ps-1 ps-md-2">
+						<p><strong>Reward</strong></p>
+					</div>
+					<div class="col-7">
+						<p id="blockReward"></p>
 					</div>
 				</div>
 				<div class="row w-100 p-1">
@@ -184,6 +192,6 @@
 
 {% block scripts %}
 	<script src="./scripts/common/prices.js?v=44"></script>
-	<script src="./scripts/common/lithos.js?v=1"></script>
-	<script src="./scripts/blocks.js?v=45"></script>
+	<script src="./scripts/common/genesis.js?v=1"></script>
+	<script src="./scripts/blocks.js?v=46"></script>
 {% endblock %}
