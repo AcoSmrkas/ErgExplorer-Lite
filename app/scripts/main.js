@@ -830,6 +830,7 @@ function initNodeBadge() {
 	if (!url) {
 		$('.node-badge').addClass('node-none');
 		$('.nodeBadgeText').text('Choose node');
+		$('.node-badge').removeClass('text-light');
 		return;
 	}
 

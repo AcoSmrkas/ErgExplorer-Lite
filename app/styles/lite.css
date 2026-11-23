@@ -14,30 +14,15 @@
 	vertical-align: middle;
 }
 
-/* The node picker in the nav: a pill as tall as the theme switcher's icon, centred on it */
+/* The node picker in the nav, styled like the network menu it replaced: plain nav text with a
+   caret, plus a small status dot */
 .navbar .nav-link.node-badge {
 	display: inline-flex !important;
 	align-items: center;
-	gap: 7px;
-	height: 30px;
-	max-width: 230px;
-	margin: 11px 6px;
-	padding: 0 12px 0 10px !important;
-	border: 1px solid rgba(127, 127, 127, 0.35);
-	border-radius: 15px;
-	font-size: 0.85rem;
-	line-height: 1;
+	gap: 6px;
+	max-width: 240px;
+	line-height: 36px;
 	white-space: nowrap;
-	transition: border-color 0.15s;
-}
-
-.navbar .nav-link.node-badge:hover {
-	border-color: var(--main-color);
-}
-
-.node-badge .fa-server {
-	font-size: 0.8rem;
-	opacity: 0.8;
 }
 
 .node-badge .nodeBadgeText {
@@ -45,10 +30,14 @@
 	text-overflow: ellipsis;
 }
 
+.node-badge.dropdown-toggle::after {
+	margin-left: 2px;
+}
+
 .node-dot {
 	flex: none;
-	width: 7px;
-	height: 7px;
+	width: 6px;
+	height: 6px;
 	border-radius: 50%;
 	background: #888;
 }
@@ -56,12 +45,6 @@
 .node-ok .node-dot { background: #3fb950; }
 .node-lagging .node-dot { background: #d29922; }
 .node-down .node-dot { background: #f85149; }
-
-/* No node yet: the pill is the call to action */
-.node-badge.node-none {
-	border-color: var(--main-color);
-	color: var(--main-color) !important;
-}
 
 .node-badge.node-none .node-dot {
 	display: none;
@@ -163,7 +146,6 @@
 
 	.navbar .nav-link.node-badge {
 		max-width: 100%;
-		margin: 6px auto;
 	}
 }
 
